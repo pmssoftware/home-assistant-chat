@@ -53,3 +53,13 @@ def test_channel_lifecycle_access_and_device_revoke():
     try: d.delete_channel("admin",{"admin"},"public")
     except ValueError as err: assert str(err) == "default_channel"
     else: assert False
+
+def test_announcements_are_visible_but_read_only_and_key_offers_use_visibility():
+    d=ChatDomain.fresh(); d.register_device("u","du","pub-u")
+    assert "announcements" in {c["id"] for c in d.channels_for("u",set(),True,None)}
+    try:d.add_message("u","announcements","Y2lwaGVy",env("du"),set())
+    except PermissionError:pass
+    else:assert False
+    wrapped='{"sender_device_id":"du","sender_public":{},"nonce":"AA==","ciphertext":"AA=="}'
+    d.offer_key("u","announcements","du","announcements:1",wrapped,set())
+    assert d.data["keys"]["announcements"]["announcements:1"]["du"]["from_device_id"] == "du"

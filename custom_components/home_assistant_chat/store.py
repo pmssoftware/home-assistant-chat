@@ -52,7 +52,6 @@ class ChatStore:
         for listener in tuple(self._listeners): listener({"event":event, **payload})
         await self._store.async_save(self.data)
 
-    def admins(self) -> set[str]: return {u.id for u in self.hass.auth.users if u.is_admin}
     def settings(self) -> dict[str, Any]:
         return {key:self.entry.options.get(key, self.entry.data.get(key, default)) for key,default in {"enabled":True,"allow_users":True,"retention_days":0,"encryption_enabled":True,"show_security_details":False}.items()}
     def can_use(self, user_id: str) -> bool:

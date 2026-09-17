@@ -15,6 +15,10 @@ def _error(connection, msg_id, code): connection.send_error(msg_id, code, code)
 def _require_access(store, connection, msg_id) -> bool:
     if not store.can_use(_uid(connection)): _error(connection,msg_id,"chat_disabled"); return False
     return True
+async def _members(hass, raw: list[str]) -> set[str]:
+    known={u.id for u in await hass.auth.async_get_users()}
+    if not set(raw) <= known: raise ValueError("invalid_member")
+    return set(raw)
 
 def async_register_websocket(hass: HomeAssistant, store) -> None:
     if hass.data.setdefault(f"{DOMAIN}_ws_registered", False): return
@@ -27,7 +31,7 @@ async def _state(hass, connection, msg):
     store=_store(hass)
     if not _require_access(store,connection,msg["id"]): return
     uid=_uid(connection); admins=_admins(connection); settings=store.settings()
-    channels=store.domain.channels_for(uid,admins,settings["enabled"],store.data["users"].get("allowed"))
+    channels=store.domain.channels_for(uid,admins,settings["enabled"],store.data["users"].get("allowed"),include_members=bool(admins))
     visible={c["id"] for c in channels}; names={u.id:u.name for u in await hass.auth.async_get_users()}; messages=[{**m,"sender_name":names.get(m["sender_id"],"User")} for m in store.data["messages"].values() if m["channel_id"] in visible and not m["deleted"]]
     devices=[]
     source=store.data["devices"].items() if admins else [(uid,store.data["devices"].get(uid,{}))]
@@ -74,7 +78,7 @@ async def _private(hass, connection, msg):
 @websocket_api.async_response
 async def _channel_create(hass, connection, msg):
     store=_store(hass)
-    try: result=store.domain.add_channel(_uid(connection),_admins(connection),msg["name"],msg["kind"],msg["restricted"],set(msg["members"])); await store.changed("channel",channel=result)
+    try: result=store.domain.add_channel(_uid(connection),_admins(connection),msg["name"],msg["kind"],msg["restricted"],await _members(hass,msg["members"])); await store.changed("channel",channel=result)
     except (PermissionError,ValueError) as err: _error(connection,msg["id"],str(err))
     else: _result(connection,msg["id"],{"channel":result})
 
@@ -83,7 +87,7 @@ async def _channel_create(hass, connection, msg):
 @websocket_api.async_response
 async def _channel_edit(hass, connection, msg):
     store=_store(hass)
-    try: result=store.domain.edit_channel(_uid(connection),_admins(connection),msg["channel_id"],msg["name"],msg["restricted"],set(msg["members"])); await store.changed("channel",channel=result)
+    try: result=store.domain.edit_channel(_uid(connection),_admins(connection),msg["channel_id"],msg["name"],msg["restricted"],await _members(hass,msg["members"])); await store.changed("channel",channel=result)
     except (PermissionError,ValueError,KeyError) as err: _error(connection,msg["id"],str(err))
     else: _result(connection,msg["id"],{"channel":result})
 
@@ -101,7 +105,7 @@ async def _channel_delete(hass, connection, msg):
 @websocket_api.async_response
 async def _channel_members(hass, connection, msg):
     store=_store(hass)
-    try: store.domain.set_members(_uid(connection),_admins(connection),msg["channel_id"],set(msg["members"])); await store.changed("channel",channel=store.data["channels"][msg["channel_id"]])
+    try: store.domain.set_members(_uid(connection),_admins(connection),msg["channel_id"],await _members(hass,msg["members"])); await store.changed("channel",channel=store.data["channels"][msg["channel_id"]])
     except (PermissionError,KeyError) as err: _error(connection,msg["id"],str(err))
     else: _result(connection,msg["id"])
 
@@ -199,13 +203,15 @@ async def _key_offer(hass, connection, msg):
 @websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/key/state", vol.Required("channel_id"): str})
 @websocket_api.async_response
 async def _key_state(hass, connection, msg):
-    store=_store(hass); result=store.domain.key_state(_uid(connection),msg["channel_id"]); result["security_code"]=store.domain.security_code(msg["channel_id"]) if store.settings()["show_security_details"] else None; _result(connection,msg["id"],result)
+    store=_store(hass)
+    if not store.domain.can_view(msg["channel_id"],_uid(connection),_admins(connection)): _error(connection,msg["id"],"channel_access"); return
+    result=store.domain.key_state(_uid(connection),msg["channel_id"]); result["security_code"]=store.domain.security_code(msg["channel_id"]) if store.settings()["show_security_details"] else None; _result(connection,msg["id"],result)
 
 @websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/key/devices", vol.Required("channel_id"): str})
 @websocket_api.async_response
 async def _key_devices(hass, connection, msg):
     store=_store(hass)
-    try: result=store.domain.devices_for_channel(_uid(connection),msg["channel_id"])
+    try: result=store.domain.devices_for_channel(_uid(connection),msg["channel_id"],_admins(connection))
     except PermissionError as err: _error(connection,msg["id"],str(err))
     else: _result(connection,msg["id"],[{"id":d["id"],"user_id":d["user_id"],"public_key":d["public_key"]} for d in result])
 
@@ -213,7 +219,9 @@ async def _key_devices(hass, connection, msg):
 @websocket_api.async_response
 async def _key_request(hass, connection, msg):
     store=_store(hass)
-    try: result=store.domain.request_key(_uid(connection),msg["channel_id"],msg["device_id"]); await store.changed("key_request",request=result)
+    try:
+        if not store.domain.can_view(msg["channel_id"],_uid(connection),_admins(connection)) or msg["device_id"] not in store.data["devices"].get(_uid(connection),{}): raise PermissionError("device_access")
+        result=store.domain.request_key(_uid(connection),msg["channel_id"],msg["device_id"]); await store.changed("key_request",request=result)
     except (PermissionError,KeyError) as err: _error(connection,msg["id"],str(err))
     else: _result(connection,msg["id"],{"state":"waiting_for_device","request_id":result["id"]})
 
