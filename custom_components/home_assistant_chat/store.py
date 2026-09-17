@@ -29,7 +29,8 @@ class ChatStore:
         saved = await self._store.async_load()
         if saved: self.domain = ChatDomain(saved); self.domain.migrate()
         self.data["channels"].setdefault("public", {"id":"public","kind":"public","name":"Public chat","restricted":False,"members":[],"key_epoch":1})
-        self.data["channels"].setdefault("announcements", {"id":"announcements","kind":"announcement","name":"Announcements","restricted":True,"members":[],"key_epoch":1})
+        self.data["channels"].setdefault("announcements", {"id":"announcements","kind":"announcement","name":"Announcements","restricted":False,"members":[],"key_epoch":1})
+        self.data["channels"]["announcements"]["restricted"] = False
         for channel in self.data["channels"].values(): channel.setdefault("key_epoch", 1)
         await self._cleanup_retention(); await self._store.async_save(self.data)
 

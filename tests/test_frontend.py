@@ -17,7 +17,12 @@ def test_encryption_storage_and_protocol_markers():
 
 def test_admin_bindings_and_csp_safe_markup():
     source=JS.read_text()
-    assert 'd.querySelectorAll("[data-tab]")' in source
-    assert 'data-user' in source and 'data-id' in source
-    assert 'function unwrap' in source and 'key/request' in source
+    assert 'dialog.querySelectorAll("[data-tab]")' in source
+    assert 'user/access' in source and 'admin/mute' in source
+    assert 'function unwrapChannelKey' in source and 'key/request' in source
+    assert 'private/delete' in source and 'user/block' in source
+    assert 'show_security_details' in source and 'keySecurityCode' in source
+    assert 'channel/edit' in source and 'channel-members' in source
+    assert 'revoke-device' in source and 'block-private' in source and 'delete-private' in source
+    assert 'promptForEdit' not in source
     assert not re.search(r'<[^>]+\s+on(?:click|error)\s*=', source)

@@ -16,17 +16,19 @@ Encryption is experimental: browser Web Crypto/IndexedDB holds device private ke
 pytest -q
 ```
 
-The current UI is intentionally compact: channel membership editing, user allow-list editing, device/security-code views, and mute controls are exposed through the domain/WebSocket API but are not yet surfaced as complete administrator screens. There is no verified identity binding, forward secrecy, post-compromise security, or standards-compliant MLS. No network service, GitHub publication, live installation, or federation is included.
+The administrator panel includes channel and membership management, per-user access, moderation, encrypted-device revocation, retention settings, and optional encryption details. Private chats support exact-name creation, blocking, deleting for both participants, and automatic unblocking when the blocker deliberately starts the chat again.
+
+There is no verified identity binding, forward secrecy, post-compromise security, or standards-compliant MLS. Home Assistant runtime testing and browser crypto round-trip automation still need to be completed on a system with Home Assistant and Node.js installed. No network service, GitHub publication, live installation, or federation is included yet.
 
 ## Feature matrix
 
 | Capability | v1 status |
 | --- | --- |
 | Native sidebar panel and config flow | Implemented |
-| Public, restricted, private, and announcement channels | Domain/API implemented; compact admin UI included |
+| Public, restricted, private, and announcement channels | Implemented, including membership editing |
 | Exact-handle privacy and two-sided blocking | Implemented |
-| Per-user access, seen state, mute, deletion, retention | Implemented in domain/API |
+| Per-user access, seen state, mute, deletion, retention | Implemented in the API and administrator UI |
 | Browser-only device keys and encrypted envelopes | Experimental implementation |
-| Key requests, wrapped offers, epoch rotation, waiting state | Implemented in domain/API; recovery UX limited |
-| Security code and device administration | Admin-gated API/UI data; verification is not provided |
+| Key requests, wrapped offers, epoch rotation, waiting state | Implemented experimentally |
+| Security code and device administration | Implemented; identity verification is not provided |
 | Federation / MLS / verified identity | Not implemented |

@@ -43,13 +43,17 @@ class ChatDomain:
         sid = server_id or new_id("server")
         return cls({"schema_version": 2, "server_id": sid, "channels": {
             "public": {"id":"public","kind":"public","name":"Public chat","restricted":False,"members":[],"key_epoch":1},
-            "announcements": {"id":"announcements","kind":"announcement","name":"Announcements","restricted":True,"members":[],"key_epoch":1},
+            "announcements": {"id":"announcements","kind":"announcement","name":"Announcements","restricted":False,"members":[],"key_epoch":1},
         }, "messages": {}, "blocks": {}, "mutes": {}, "devices": {}, "keys": {}, "key_requests": {}, "seen": {}, "replay": {}, "users": {"allowed": None}})
 
     def migrate(self) -> bool:
         changed = False; version = self.data.get("schema_version", 0); defaults = self.fresh(self.data.get("server_id")).data
         for key, value in defaults.items():
             if key not in self.data: self.data[key] = value; changed = True
+        announcements = self.data.get("channels", {}).get("announcements")
+        if announcements and announcements.get("restricted") is not False:
+            announcements["restricted"] = False
+            changed = True
         if version < 2: self.data["schema_version"] = 2; changed = True
         return changed
 
@@ -58,7 +62,7 @@ class ChatDomain:
 
     def channels_for(self, user_id: str, admins: set[str], globally_enabled: bool, allowed_users: set[str] | None, include_members: bool = False) -> list[dict[str, Any]]:
         if not self.can_access(user_id, globally_enabled, allowed_users): return []
-        return [dict(ch) if include_members and user_id in admins else {k:v for k,v in ch.items() if k != "members"} for ch in self.data["channels"].values() if (ch["kind"] == "private" and user_id in ch["members"] and not self.private_blocked(*ch["members"])) or (ch["kind"] == "announcement") or (ch["kind"] != "private" and ch["kind"] != "announcement" and (not ch["restricted"] or user_id in ch["members"] or user_id in admins))]
+        return [dict(ch) if include_members and user_id in admins else {k:v for k,v in ch.items() if k != "members"} for ch in self.data["channels"].values() if (ch["kind"] == "private" and user_id in ch["members"] and not self.private_blocked(*ch["members"])) or (ch["kind"] != "private" and (not ch["restricted"] or user_id in ch["members"] or user_id in admins))]
 
     def can_post(self, channel_id: str, user_id: str, admins: set[str]) -> bool:
         channel = self.data["channels"].get(channel_id)
@@ -71,7 +75,7 @@ class ChatDomain:
     def can_view(self, channel_id: str, user_id: str, admins: set[str]) -> bool:
         channel=self.data["channels"].get(channel_id)
         if not channel: return False
-        if channel["kind"] == "announcement": return True
+        if channel["kind"] == "announcement": return not channel["restricted"] or user_id in channel["members"] or user_id in admins
         if channel["kind"] == "private": return user_id in channel["members"] and not self.private_blocked(*channel["members"])
         return not channel["restricted"] or user_id in channel["members"] or user_id in admins
 
@@ -81,11 +85,18 @@ class ChatDomain:
         channel = {"id":new_id("channel"),"kind":kind,"name":name.strip()[:80],"restricted":restricted,"members":sorted(members),"key_epoch":1}
         self.data["channels"][channel["id"]] = channel; return channel
 
-    def edit_channel(self, actor: str, admins: set[str], channel_id: str, name: str, restricted: bool, members: set[str]) -> dict[str, Any]:
+    def edit_channel(self, actor: str, admins: set[str], channel_id: str, name: str, restricted: bool, members: set[str], kind: str | None = None) -> dict[str, Any]:
         if actor not in admins: raise PermissionError("admin_required")
         channel=self.data["channels"].get(channel_id)
         if not channel or channel_id in {"public","announcements"} and channel["kind"] in {"public","announcement"} and not name.strip(): raise ValueError("invalid_channel")
         if not channel: raise KeyError("channel_not_found")
+        if channel_id == "public":
+            kind, restricted, members = "public", False, set()
+        elif channel_id == "announcements":
+            kind, restricted, members = "announcement", False, set()
+        elif kind is not None:
+            if kind not in {"public", "group", "announcement"}: raise ValueError("invalid_channel")
+            channel["kind"] = kind
         channel.update(name=name.strip()[:80],restricted=restricted,members=sorted(members)); channel["key_epoch"]=channel.get("key_epoch",1)+1; return channel
 
     def delete_channel(self, actor: str, admins: set[str], channel_id: str) -> None:
@@ -120,7 +131,7 @@ class ChatDomain:
         if actor in self.data["blocks"].get(target, []): raise PermissionError("blocked_by_other")
         cid = "dm_" + "_".join(sorted((actor, target)))
         self.data["channels"].setdefault(cid, {"id":cid,"kind":"private","name":"Private chat","restricted":True,"members":sorted((actor,target)),"key_epoch":1})
-        return {"channel":self.data["channels"][cid],"user":{"id":target,"name":handle,"avatar_url":f"/api/config/avatar/{target}"},"unblocked":own_block}
+        return {"channel":self.data["channels"][cid],"user":{"id":target,"name":handle},"unblocked":own_block}
 
     def add_block(self, actor: str, target: str) -> None:
         blocks=set(self.data["blocks"].get(actor, [])); blocks.add(target); self.data["blocks"][actor]=sorted(blocks)
@@ -162,15 +173,23 @@ class ChatDomain:
     def offer_key(self, actor: str, channel_id: str, device_id: str, key_id: str, wrapped_key: str, admins: set[str]) -> None:
         if not self.can_view(channel_id, actor, admins): raise PermissionError("channel_access")
         if not all(isinstance(x,str) and x for x in (device_id,key_id,wrapped_key)): raise ValueError("invalid_key_offer")
+        channel = self.data["channels"][channel_id]
+        if key_id != f"{channel_id}:{channel.get('key_epoch', 1)}": raise ValueError("invalid_key_offer")
+        target_owner = next((uid for uid, devices in self.data["devices"].items() if device_id in devices), None)
+        if target_owner is None or not self.can_view(channel_id, target_owner, admins): raise ValueError("invalid_key_offer")
         try: wrapped=json.loads(wrapped_key)
         except (TypeError,ValueError) as err: raise ValueError("invalid_key_offer") from err
         if wrapped.get("sender_device_id") not in self.data["devices"].get(actor,{}): raise ValueError("invalid_key_offer")
         self.data["keys"].setdefault(channel_id,{}).setdefault(key_id,{})[device_id] = {"device_id":device_id,"wrapped_key":wrapped_key,"from_device":actor,"from_device_id":wrapped["sender_device_id"]}
-    def key_state(self, user_id: str, channel_id: str) -> dict[str, Any]:
+    def key_state(self, user_id: str, channel_id: str, admins: set[str] | None = None) -> dict[str, Any]:
+        if not self.can_view(channel_id, user_id, admins or set()): raise PermissionError("channel_access")
         devices = self.data["devices"].get(user_id,{})
         offers = self.data["keys"].get(channel_id,{})
         own_ids=set(devices); available=[device_id for key in offers.values() for device_id in key if device_id in own_ids]
-        return {"state":"ready" if available else "waiting_for_device","device_count":len(devices),"security_code":self.security_code(channel_id) if self.data["channels"].get(channel_id,{}).get("show_security_details") else None,"offers":{key_id:{device_id:{**offer,"key_id":key_id} for device_id,offer in group.items() if device_id in own_ids} for key_id,group in offers.items()}}
+        channel = self.data["channels"][channel_id]
+        participant_ids = channel["members"] if channel["restricted"] else list(self.data["devices"])
+        device_count = sum(len(self.data["devices"].get(uid, {})) for uid in participant_ids)
+        return {"state":"ready" if available else "waiting_for_device","device_count":device_count,"offers":{key_id:{device_id:{**offer,"key_id":key_id} for device_id,offer in group.items() if device_id in own_ids} for key_id,group in offers.items()}}
     def security_code(self, channel_id: str) -> str: return hashlib.sha256(f"{self.data['server_id']}:{channel_id}:{self.data['channels'].get(channel_id,{}).get('key_epoch',1)}".encode()).hexdigest()[:12].upper()
     def request_key(self, user_id: str, channel_id: str, device_id: str) -> dict[str, Any]:
         request={"id":new_id("keyreq"),"user_id":user_id,"device_id":device_id,"channel_id":channel_id,"created":time.time()}; self.data["key_requests"][request["id"]]=request; return request
@@ -187,4 +206,4 @@ class ChatDomain:
         channel = self.data["channels"].get(channel_id)
         if not self.can_view(channel_id,user_id,admins or set()): raise PermissionError("channel_access")
         user_ids = channel["members"] if channel["restricted"] else list(self.data["devices"])
-        return [device for uid in user_ids for device in self.data["devices"].get(uid, {}).values() if device["user_id"] != user_id]
+        return [device for uid in user_ids for device in self.data["devices"].get(uid, {}).values()]

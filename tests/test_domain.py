@@ -63,3 +63,10 @@ def test_announcements_are_visible_but_read_only_and_key_offers_use_visibility()
     wrapped='{"sender_device_id":"du","sender_public":{},"nonce":"AA==","ciphertext":"AA=="}'
     d.offer_key("u","announcements","du","announcements:1",wrapped,set())
     assert d.data["keys"]["announcements"]["announcements:1"]["du"]["from_device_id"] == "du"
+
+def test_restricted_announcements_and_same_user_devices_follow_visibility():
+    d=ChatDomain.fresh(); d.register_device("u","device-one","pub-1"); d.register_device("u","device-two","pub-2")
+    channel=d.add_channel("admin",{"admin"},"Team news","announcement",True,{"u"})
+    assert channel["id"] in {item["id"] for item in d.channels_for("u",set(),True,None)}
+    assert {item["id"] for item in d.devices_for_channel("u",channel["id"])} == {"device-one","device-two"}
+    assert channel["id"] not in {item["id"] for item in d.channels_for("other",set(),True,None)}
