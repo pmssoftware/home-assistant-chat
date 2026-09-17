@@ -1,0 +1,1 @@
+No third-party runtime dependencies are bundled. The integration uses Home Assistant APIs and browser-standard Web Crypto and IndexedDB.

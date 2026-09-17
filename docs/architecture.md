@@ -1,0 +1,7 @@
+# Architecture and future federation boundary
+
+The integration separates chat/domain state (`store.py`) from the Home Assistant WebSocket adapter (`websocket.py`). Messages use `protocol_version`, globally unique local IDs, `origin_server_id`, channel routing metadata, and a portable encrypted envelope. A future bridge must translate this protocol at the transport boundary rather than importing Home Assistant internals.
+
+The v1 server persists ciphertext only for message content. Device private keys remain in browser IndexedDB; channel key sharing and recovery states are intentionally experimental and incomplete. Replay protection requires a future bridge to enforce message IDs, sender device counters, expiry, and authenticated origin. Trust verification must bind device keys to an out-of-band security code or equivalent user verification. Discovery must be explicit and opt-in (no ambient LAN enumeration), with origin allowlists, rate limits, and administrator approval.
+
+Threat model: this reduces plaintext exposure to the server database, but not to the active Home Assistant process, browser runtime, XSS, backups, logs, compromised admins, or enrolled devices. It offers no forward secrecy, post-compromise security, metadata privacy, or standards-compliant MLS guarantees.
