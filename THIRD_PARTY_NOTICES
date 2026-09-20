@@ -1,1 +1,13 @@
-No third-party runtime dependencies are bundled. The integration uses Home Assistant APIs and browser-standard Web Crypto and IndexedDB.
+The integration uses Home Assistant APIs and browser-standard Web Crypto and
+IndexedDB. The following QR dependencies are bundled for offline use.
+QR Code Generator for JavaScript 1.4.4
+Copyright (c) 2009 Kazuhiko Arase
+Licensed under the MIT License. The complete license text is bundled at
+custom_components/home_assistant_chat/frontend/vendor/qrcode-generator.LICENSE.
+Source: https://github.com/kazuhikoarase/qrcode-generator
+
+qr-scanner 1.4.2
+Copyright (c) Nimiq
+Licensed under the MIT License. The complete license text is bundled at
+custom_components/home_assistant_chat/frontend/vendor/qr-scanner.LICENSE.
+Source: https://github.com/nimiq/qr-scanner

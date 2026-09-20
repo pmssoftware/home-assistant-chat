@@ -147,7 +147,8 @@ def test_identity_is_visible_copyable_and_peer_uuid_is_not_contact_identifier():
     assert 'identityMarkup()' in source
     assert 'copy-identity' in source and 'navigator.clipboard.writeText' in source
     assert 'this.identityMarkup()' in source
-    assert 'channel.peer.identity || "—"' in source
+    assert 'String(channel.peer.identity || "")' in source
+    assert 'esc(identity || "—")' in source
     assert 'channel.peer.id}</code>' not in source
 
 def test_recovery_bundle_is_client_side_pbkdf2_aes_gcm_and_idb_backed():
@@ -213,6 +214,32 @@ def test_core_state_initializes_before_encryption_and_admin_fallback_is_nonblock
     assert 'sanitizeError(error)' in source
     assert 'replace(/[^A-Za-z0-9_.:-]/g, "")' in source
     assert 'this._encryptionRetryTimer' in source
+
+def test_identity_qr_ui_has_manual_confirmation_and_camera_lifecycle():
+    source = JS.read_text()
+    assert 'import "./qr-adapter.js"' in source
+    assert 'showIdentityQr(identity)' in source
+    assert 'show-identity-qr' in source and 'show-peer-qr' in source
+    assert 'scan-identity' in source and 'this.scanQrDialog' in source
+    assert 'navigator.mediaDevices.getUserMedia' in source
+    assert 'facingMode:{ideal:"environment"}' in source
+    assert 'input class="qr-file"' in source and 'type="file" accept="image/*"' in source
+    assert 'getTracks().forEach((track) => track.stop())' in source
+    assert 'globalThis.HAChatQR' in source
+    assert 'globalThis.BarcodeDetector' in source
+    assert 'onDecoded(identity)' in source
+    assert 'this.text.qrPermission' in source and 'this.text.qrInvalid' in source
+    assert 'QR_DEPENDENCY.md' not in source  # dependency note stays out of runtime UI
+
+def test_qr_dependencies_are_bundled_locally_with_licenses():
+    frontend = ROOT / "custom_components/home_assistant_chat/frontend"
+    adapter = (frontend / "qr-adapter.js").read_text()
+    assert 'qrcode-generator.js' in adapter and 'qr-scanner.min.js' in adapter
+    assert 'globalThis.HAChatQR' in adapter
+    assert (frontend / "vendor/qrcode-generator.LICENSE").is_file()
+    assert (frontend / "vendor/qr-scanner.LICENSE").is_file()
+    notices = (ROOT / "THIRD_PARTY_NOTICES").read_text()
+    assert "qrcode-generator" in notices and "qr-scanner" in notices
 
 
 def test_deleted_message_markers_are_localized_and_admin_configurable():

@@ -1,4 +1,5 @@
 /* Home Assistant Chat: browser-only experimental encryption, no native dialogs. */
+import "./qr-adapter.js";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const b64 = (value) => btoa(String.fromCharCode(...new Uint8Array(value)));
@@ -25,7 +26,7 @@ const STRINGS = {
     confirmRevoke:"Revoke this encrypted device?", owner:"Owner", ready:"Encrypted", experimental:"experimental", activeChannel:"Active channel",
     defaultChannel:"Default channel", cannotPost:"You cannot post in this channel.", noUsers:"No users found", noDevices:"No encrypted devices found", noChannels:"No channels found",
     messageDeleted:"Message deleted", showDeletedMessages:"Show a marker for deleted messages", userSettingsHint:"Manage the people you have blocked.",
-    contactInfo:"Contact info", silence:"Silence", unsilence:"Unmute", userIdentifier:"Home Assistant user ID", moreOptions:"More options", announcements:"Announcements", recovery:"Encrypted recovery", createRecovery:"Create recovery code", showRecovery:"Show recovery code", restoreRecovery:"Restore from recovery code", recoveryWarning:"Save this code somewhere safe. A new device needs it; the server cannot recover it.", recoveryUnavailable:"No recovery bundle is stored yet.", recoveryInvalid:"This recovery code could not decrypt the bundle.", recoveryUpdated:"Encrypted recovery bundle updated.", recoveryCodePlaceholder:"Paste recovery code",
+    contactInfo:"Contact info", silence:"Silence", unsilence:"Unmute", userIdentifier:"Home Assistant user ID", moreOptions:"More options", announcements:"Announcements", showQr:"Show identity QR", scanQr:"Scan identity QR", qrCamera:"Camera", qrFile:"Choose QR image", qrPermission:"Camera permission is required to scan a QR code.", qrUnsupported:"QR scanning is unavailable in this browser. Choose an image or enter the identity manually.", qrInvalid:"No valid identity was found in that QR code.", qrDependency:"QR support is not bundled in this build yet.", recovery:"Encrypted recovery", createRecovery:"Create recovery code", showRecovery:"Show recovery code", restoreRecovery:"Restore from recovery code", recoveryWarning:"Save this code somewhere safe. A new device needs it; the server cannot recover it.", recoveryUnavailable:"No recovery bundle is stored yet.", recoveryInvalid:"This recovery code could not decrypt the bundle.", recoveryUpdated:"Encrypted recovery bundle updated.", recoveryCodePlaceholder:"Paste recovery code",
     resetKey:"Start with a new key", confirmResetKey:"Create a new encryption key for this chat? Older messages whose keys cannot be recovered will remain unreadable, but new messages will work.", resetError:"Could not create a new encryption key. Please try again."
   },
   de: {
@@ -45,7 +46,7 @@ const STRINGS = {
     activeChannel:"Aktiver Kanal", defaultChannel:"Standardkanal", cannotPost:"Du kannst in diesem Kanal nicht schreiben.",
     noUsers:"Keine Benutzer gefunden", noDevices:"Keine verschlüsselten Geräte gefunden", noChannels:"Keine Kanäle gefunden",
     messageDeleted:"Nachricht gelöscht", showDeletedMessages:"Markierung für gelöschte Nachrichten anzeigen", userSettingsHint:"Verwalte die von dir blockierten Benutzer.",
-    contactInfo:"Kontaktinformationen", silence:"Stummschalten", unsilence:"Stummschaltung aufheben", userIdentifier:"Home-Assistant-Benutzer-ID", moreOptions:"Weitere Optionen", announcements:"Ankündigungen", recovery:"Verschlüsselte Wiederherstellung", createRecovery:"Wiederherstellungscode erstellen", showRecovery:"Wiederherstellungscode anzeigen", restoreRecovery:"Mit Wiederherstellungscode wiederherstellen", recoveryWarning:"Bewahre diesen Code sicher auf. Ein neues Gerät benötigt ihn; der Server kann ihn nicht wiederherstellen.", recoveryUnavailable:"Noch kein Wiederherstellungsbundle gespeichert.", recoveryInvalid:"Dieser Wiederherstellungscode konnte das Bundle nicht entschlüsseln.", recoveryUpdated:"Verschlüsseltes Wiederherstellungsbundle aktualisiert.", recoveryCodePlaceholder:"Wiederherstellungscode einfügen",
+    contactInfo:"Kontaktinformationen", silence:"Stummschalten", unsilence:"Stummschaltung aufheben", userIdentifier:"Home-Assistant-Benutzer-ID", moreOptions:"Weitere Optionen", announcements:"Ankündigungen", showQr:"Identitäts-QR anzeigen", scanQr:"Identitäts-QR scannen", qrCamera:"Kamera", qrFile:"QR-Bild auswählen", qrPermission:"Zum Scannen eines QR-Codes ist eine Kameraberechtigung erforderlich.", qrUnsupported:"QR-Scannen ist in diesem Browser nicht verfügbar. Wähle ein Bild oder gib die Identität manuell ein.", qrInvalid:"In diesem QR-Code wurde keine gültige Identität gefunden.", qrDependency:"QR-Unterstützung ist in diesem Build noch nicht gebündelt.", recovery:"Verschlüsselte Wiederherstellung", createRecovery:"Wiederherstellungscode erstellen", showRecovery:"Wiederherstellungscode anzeigen", restoreRecovery:"Mit Wiederherstellungscode wiederherstellen", recoveryWarning:"Bewahre diesen Code sicher auf. Ein neues Gerät benötigt ihn; der Server kann ihn nicht wiederherstellen.", recoveryUnavailable:"Noch kein Wiederherstellungsbundle gespeichert.", recoveryInvalid:"Dieser Wiederherstellungscode konnte das Bundle nicht entschlüsseln.", recoveryUpdated:"Verschlüsseltes Wiederherstellungsbundle aktualisiert.", recoveryCodePlaceholder:"Wiederherstellungscode einfügen",
     resetKey:"Mit neuem Schlüssel fortfahren", confirmResetKey:"Einen neuen Verschlüsselungsschlüssel für diesen Chat erstellen? Ältere Nachrichten ohne wiederherstellbaren Schlüssel bleiben unlesbar, aber neue Nachrichten funktionieren wieder.", resetError:"Der neue Verschlüsselungsschlüssel konnte nicht erstellt werden. Bitte versuche es erneut."
   }
 };
@@ -249,7 +250,7 @@ class HomeAssistantChatPanel extends HTMLElement {
     this._encryptionRetryTimer = setTimeout(() => { this._encryptionRetryTimer = null; this.startEncryption(); }, delay);
   }
 
-  disconnectedCallback() { this._disconnected = true; if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; } if (this._encryptionRetryTimer) { clearTimeout(this._encryptionRetryTimer); this._encryptionRetryTimer = null; } if (typeof this._unsubscribe === "function") this._unsubscribe(); this._unsubscribe = null; this._ready = false; this._coreReady = false; }
+  disconnectedCallback() { this._disconnected = true; this.stopQrScanner(); if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; } if (this._encryptionRetryTimer) { clearTimeout(this._encryptionRetryTimer); this._encryptionRetryTimer = null; } if (typeof this._unsubscribe === "function") this._unsubscribe(); this._unsubscribe = null; this._ready = false; this._coreReady = false; }
 
   async refreshState() {
     this._state = await this.ws({type:"home_assistant_chat/state"});
@@ -352,13 +353,51 @@ class HomeAssistantChatPanel extends HTMLElement {
 
   identityMarkup() {
     const identity = this.identityValue();
-    return `<div class="identity-card"><span>${this.text.ownIdentity}</span><code>${esc(identity || "—")}</code>${identity ? `<button class="button copy-identity" data-identity="${esc(identity)}" type="button">${this.text.copyIdentity}</button>` : ""}</div>`;
+    return `<div class="identity-card"><span>${this.text.ownIdentity}</span><code>${esc(identity || "—")}</code>${identity ? `<button class="button copy-identity" data-identity="${esc(identity)}" type="button">${this.text.copyIdentity}</button><button class="button show-identity-qr" data-identity="${esc(identity)}" type="button">${this.text.showQr}</button>` : ""}</div>`;
   }
 
   bindIdentityCopy(container) {
     container.querySelectorAll(".copy-identity").forEach((button) => button.addEventListener("click", async () => {
       try { await navigator.clipboard.writeText(button.dataset.identity); button.textContent = this.text.copiedIdentity; } catch { /* clipboard permission is optional */ }
     }));
+  }
+
+  stopQrScanner() {
+    if (this._qrRaf) cancelAnimationFrame(this._qrRaf); this._qrRaf = null;
+    if (this._qrStream) this._qrStream.getTracks().forEach((track) => track.stop()); this._qrStream = null;
+  }
+
+  async showIdentityQr(identity) {
+    const dialog = this.dialog(this.text.showQr, `<p class="qr-value"><code>${esc(identity)}</code></p><div class="qr-preview" style="width:min(280px,80vw);margin:auto" aria-label="${esc(this.text.showQr)}"></div><p class="qr-note"></p>`, `<button class="button close">${this.text.close}</button>`);
+    dialog.querySelector(".close").addEventListener("click", () => dialog.remove());
+    dialog.addEventListener("click", (event) => { if (event.target === dialog) { this.stopQrScanner(); dialog.remove(); } });
+    const preview = dialog.querySelector(".qr-preview"); const note = dialog.querySelector(".qr-note");
+    try {
+      // A locally vendored adapter may expose encode(text) -> data URL or SVG.
+      const encoded = await globalThis.HAChatQR?.encode?.(identity);
+      if (encoded) { preview.innerHTML = typeof encoded === "string" && encoded.startsWith("<") ? encoded : `<img alt="${esc(this.text.showQr)}" src="${esc(encoded)}">`; }
+      else note.textContent = this.text.qrDependency;
+    } catch { note.textContent = this.text.qrUnsupported; }
+  }
+
+  decodeQrSource(source) {
+    const adapter = globalThis.HAChatQR;
+    if (adapter?.decode) return adapter.decode(source);
+    if (globalThis.BarcodeDetector) return new globalThis.BarcodeDetector({formats:["qr_code"]}).detect(source).then((items) => items[0]?.rawValue || null).catch(() => null);
+    return null;
+  }
+
+  async scanQrDialog(onDecoded) {
+    const dialog = this.dialog(this.text.scanQr, `<video class="qr-video" style="display:block;width:100%;max-height:55vh;object-fit:contain" autoplay playsinline muted></video><input class="qr-file" style="display:block;width:100%;margin-top:12px" type="file" accept="image/*"><p class="qr-note">${this.text.qrUnsupported}</p>`, `<button class="button cancel">${this.text.cancel}</button>`);
+    const video = dialog.querySelector(".qr-video"); const note = dialog.querySelector(".qr-note"); const canvas = document.createElement("canvas"); const context = canvas.getContext("2d", {willReadFrequently:true});
+    const finish = (value) => { const identity = String(value || "").trim().replace(/^ha-chat:/i, ""); if (!validIdentity(identity)) { note.textContent = this.text.qrInvalid; return false; } this.stopQrScanner(); dialog.remove(); onDecoded(identity); return true; };
+    const close = () => { this.stopQrScanner(); dialog.remove(); }; dialog.querySelector(".cancel").addEventListener("click", close); dialog.addEventListener("click", (event) => { if (event.target === dialog) close(); });
+    dialog.querySelector(".qr-file").addEventListener("change", async (event) => { const file = event.target.files?.[0]; if (!file) return; try { const image = await createImageBitmap(file); canvas.width=image.width; canvas.height=image.height; context.drawImage(image,0,0); if (!finish(await this.decodeQrSource(context.getImageData(0,0,canvas.width,canvas.height)))) note.textContent = this.text.qrInvalid; image.close?.(); } catch { note.textContent = this.text.qrInvalid; } });
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) { note.textContent = this.text.qrUnsupported; return; }
+      this._qrStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}}, audio:false}); video.srcObject = this._qrStream;
+      const scan = async () => { if (!this._qrStream || !video.videoWidth) { this._qrRaf = requestAnimationFrame(scan); return; } canvas.width=video.videoWidth; canvas.height=video.videoHeight; context.drawImage(video,0,0); const decoded=await this.decodeQrSource(context.getImageData(0,0,canvas.width,canvas.height)); if (!finish(decoded)) this._qrRaf=requestAnimationFrame(scan); }; this._qrRaf=requestAnimationFrame(scan);
+    } catch { note.textContent = this.text.qrPermission; }
   }
 
   async createRecoveryCode() {
@@ -428,8 +467,9 @@ class HomeAssistantChatPanel extends HTMLElement {
   }
 
   privateDialog() {
-    const dialog = this.dialog(this.text.private, `<label>${this.text.identityNumber}<input id="private-handle" autocomplete="off" inputmode="text" placeholder="48392017 or 48392017@example.org:8123"></label><p>${this.text.handle}</p><p class="identity-error" role="alert"></p>`, `<button class="button cancel">${this.text.cancel}</button><button class="button start">${this.text.continue}</button>`);
+    const dialog = this.dialog(this.text.private, `<label>${this.text.identityNumber}<input id="private-handle" autocomplete="off" inputmode="text" placeholder="48392017 or 48392017@example.org:8123"></label><p>${this.text.handle}</p><p class="identity-error" role="alert"></p>`, `<button class="button scan-identity">${this.text.scanQr}</button><button class="button cancel">${this.text.cancel}</button><button class="button start">${this.text.continue}</button>`);
     dialog.querySelector(".cancel").addEventListener("click", () => dialog.remove());
+    dialog.querySelector(".scan-identity").addEventListener("click", () => this.scanQrDialog((identity) => { dialog.querySelector("#private-handle").value = identity; }));
     dialog.querySelector(".start").addEventListener("click", async () => {
       const handle = dialog.querySelector("#private-handle").value.trim();
       if (!validIdentity(handle)) { dialog.querySelector(".identity-error").textContent = this.text.invalidIdentity; return; }
@@ -452,7 +492,9 @@ class HomeAssistantChatPanel extends HTMLElement {
 
   privateInfoDialog(channel) {
     if (!channel?.peer) return;
-    const dialog = this.dialog(this.text.contactInfo, `<div class="row"><span>${this.text.name}</span><strong>${esc(channel.peer.name)}</strong></div><div class="row"><span>${this.text.identityNumber}</span><code>${esc(channel.peer.identity || "—")}</code></div>`, `<button class="button close">${this.text.close}</button>`);
+    const identity = String(channel.peer.identity || "");
+    const dialog = this.dialog(this.text.contactInfo, `<div class="row"><span>${this.text.name}</span><strong>${esc(channel.peer.name)}</strong></div><div class="row"><span>${this.text.identityNumber}</span><code>${esc(identity || "—")}</code></div>`, `${identity ? `<button class="button show-peer-qr">${this.text.showQr}</button>` : ""}<button class="button close">${this.text.close}</button>`);
+    dialog.querySelector(".show-peer-qr")?.addEventListener("click", () => this.showIdentityQr(identity));
     dialog.querySelector(".close").addEventListener("click", () => dialog.remove());
   }
 
@@ -514,6 +556,7 @@ class HomeAssistantChatPanel extends HTMLElement {
     const dialog = this.dialog(this.text.settings, body, `<button class="button close">${this.text.close}</button>`);
     dialog.querySelector(".close").addEventListener("click", () => dialog.remove());
     this.bindIdentityCopy(dialog);
+    dialog.querySelectorAll(".show-identity-qr").forEach((button) => button.addEventListener("click", () => this.showIdentityQr(button.dataset.identity)));
     this.bindRecoveryActions(dialog);
     this.bindUnblockActions(dialog, async () => { dialog.remove(); await this.refreshState(); await this.userSettingsDialog(); });
   }
@@ -547,6 +590,7 @@ class HomeAssistantChatPanel extends HTMLElement {
         content.innerHTML = `${this.identityMarkup()}${this.recoveryMarkup()}<label class="row">${this.text.enabled}<input id="setting-enabled" type="checkbox" ${settings.enabled ? "checked" : ""}></label><label class="row">${this.text.allowUsers}<input id="setting-users" type="checkbox" ${settings.allow_users ? "checked" : ""}></label>
           <label class="row">${this.text.retention}<input id="setting-retention" type="number" min="0" max="3650" value="${Number(settings.retention_days || 0)}"></label><label class="row">${this.text.showSecurity}<input id="setting-security" type="checkbox" ${settings.show_security_details ? "checked" : ""}></label><label class="row">${this.text.showDeletedMessages}<input id="setting-deleted-markers" type="checkbox" ${settings.show_deleted_messages ? "checked" : ""}></label><button class="button save-settings">${this.text.save}</button>${this.blockedUsersMarkup(blocked)}`;
         this.bindIdentityCopy(content);
+        content.querySelectorAll(".show-identity-qr").forEach((button) => button.addEventListener("click", () => this.showIdentityQr(button.dataset.identity)));
         this.bindRecoveryActions(content);
         content.querySelector(".save-settings").addEventListener("click", async () => { await this.ws({type:"home_assistant_chat/settings", enabled:content.querySelector("#setting-enabled").checked, allow_users:content.querySelector("#setting-users").checked, retention_days:Number(content.querySelector("#setting-retention").value), show_security_details:content.querySelector("#setting-security").checked, show_deleted_messages:content.querySelector("#setting-deleted-markers").checked}); await reload(); await show("settings"); });
         this.bindUnblockActions(content, async () => { await reload(); await show("settings"); });
