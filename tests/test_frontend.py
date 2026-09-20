@@ -35,8 +35,9 @@ def test_registered_panel_name_matches_custom_element():
 
 def test_chat_actions_and_composer_use_the_requested_layout():
     source = JS.read_text()
-    assert '<aside class="side"><h2>${text.chat}</h2>${channels.map' in source
-    assert '<div class="header-actions"><button class="button" id="new-private">' in source
+    assert '<div class="side-top"><h2>${text.chat}</h2><button class="button" id="new-private">' in source
+    assert '<div class="header-actions">${this._state?.is_admin' in source
+    assert 'height:var(--chat-header-height)' in source
     assert '<div class="message-head"><small>' in source
     assert '<ha-icon icon="mdi:delete-outline"' in source
     assert 'aria-label="${esc(text.delete)}"' in source
