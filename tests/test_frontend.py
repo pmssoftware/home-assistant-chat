@@ -27,6 +27,15 @@ def test_browser_key_store_migrates_legacy_identity_and_channel_keys():
     assert 'objectStoreNames.contains("v")' in source
     assert 'migrateStorage(transaction,"values",target)' in source
 
+def test_unrecoverable_keys_have_an_explicit_new_key_fallback():
+    source=JS.read_text()
+    assert 'home_assistant_chat/key/reset' in source
+    assert 'id="reset-key"' in source
+    assert 'resetKey:"Start with a new key"' in source
+    assert 'resetKey:"Mit neuem Schlüssel fortfahren"' in source
+    assert 'device_id:identity.id,expected_epoch:channel.key_epoch || 1' in source
+    assert 'await channelKey(channel.id,result.key_epoch,true)' in source
+
 def test_admin_bindings_and_csp_safe_markup():
     source=JS.read_text()
     assert 'dialog.querySelectorAll("[data-tab]")' in source

@@ -200,6 +200,16 @@ class ChatDomain:
         participant_ids = channel["members"] if channel["restricted"] else list(self.data["devices"])
         device_count = sum(len(self.data["devices"].get(uid, {})) for uid in participant_ids)
         return {"state":"ready" if available else "waiting_for_device","device_count":device_count,"offers":{key_id:{device_id:{**offer,"key_id":key_id} for device_id,offer in group.items() if device_id in own_ids} for key_id,group in offers.items()}}
+    def reset_channel_key(self, actor: str, channel_id: str, device_id: str, expected_epoch: int, admins: set[str] | None = None) -> int:
+        if not self.can_view(channel_id,actor,admins or set()): raise PermissionError("channel_access")
+        channel=self.data["channels"][channel_id]
+        if device_id not in self.data["devices"].get(actor,{}): raise PermissionError("device_access")
+        if expected_epoch != channel.get("key_epoch",1): raise ValueError("stale_key_epoch")
+        requests=[request_id for request_id,request in self.data["key_requests"].items() if request.get("user_id")==actor and request.get("device_id")==device_id and request.get("channel_id")==channel_id]
+        if not requests: raise PermissionError("key_recovery_not_requested")
+        channel["key_epoch"]=expected_epoch+1
+        for request_id in requests: self.data["key_requests"].pop(request_id,None)
+        return channel["key_epoch"]
     def security_code(self, channel_id: str) -> str: return hashlib.sha256(f"{self.data['server_id']}:{channel_id}:{self.data['channels'].get(channel_id,{}).get('key_epoch',1)}".encode()).hexdigest()[:12].upper()
     def request_key(self, user_id: str, channel_id: str, device_id: str) -> dict[str, Any]:
         request={"id":new_id("keyreq"),"user_id":user_id,"device_id":device_id,"channel_id":channel_id,"created":time.time()}; self.data["key_requests"][request["id"]]=request; return request

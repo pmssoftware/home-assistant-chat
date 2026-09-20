@@ -83,3 +83,20 @@ def test_private_chat_silence_is_personal_and_removed_with_chat():
     else:assert False
     d.delete_private("a",channel_id,True)
     assert d.data["silenced"]["a"] == []
+
+def test_visible_user_can_rotate_key_without_deleting_old_messages():
+    d=ChatDomain.fresh(); d.register_device("a","device-a","public-key")
+    message=d.add_message("a","public","Y2lwaGVy",env("device-a"),set())
+    d.request_key("a","public","device-a")
+    assert d.reset_channel_key("a","public","device-a",1,set()) == 2
+    assert d.data["messages"][message["id"]] == message
+
+def test_group_key_reset_rejects_stale_concurrent_attempts():
+    d=ChatDomain.fresh(); channel=d.add_channel("admin",{"admin"},"Group","group",True,{"a","b"})
+    d.register_device("a","device-a","pub-a"); d.register_device("b","device-b","pub-b")
+    d.request_key("a",channel["id"],"device-a"); d.request_key("b",channel["id"],"device-b")
+    assert d.reset_channel_key("a",channel["id"],"device-a",1,set()) == 2
+    try:d.reset_channel_key("b",channel["id"],"device-b",1,set())
+    except ValueError as err:assert str(err)=="stale_key_epoch"
+    else:assert False
+    assert d.data["channels"][channel["id"]]["members"] == ["a","b"]

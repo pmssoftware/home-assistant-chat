@@ -23,7 +23,7 @@ async def _members(hass, raw: list[str]) -> set[str]:
 def async_register_websocket(hass: HomeAssistant, store) -> None:
     if hass.data.setdefault(f"{DOMAIN}_ws_registered", False): return
     hass.data[f"{DOMAIN}_ws_registered"] = True
-    for handler in (_state,_subscribe,_send,_private,_channel_create,_channel_edit,_channel_delete,_channel_members,_message_delete,_private_delete,_private_silence,_block,_blocked_users,_unblock,_mute,_seen,_users,_user_access,_device_register,_device_list,_device_revoke,_key_offer,_key_state,_key_devices,_key_request,_settings): websocket_api.async_register_command(hass, handler)
+    for handler in (_state,_subscribe,_send,_private,_channel_create,_channel_edit,_channel_delete,_channel_members,_message_delete,_private_delete,_private_silence,_block,_blocked_users,_unblock,_mute,_seen,_users,_user_access,_device_register,_device_list,_device_revoke,_key_offer,_key_state,_key_devices,_key_request,_key_reset,_settings): websocket_api.async_register_command(hass, handler)
 
 @websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/state"})
 @websocket_api.async_response
@@ -268,6 +268,16 @@ async def _key_request(hass, connection, msg):
         result=store.domain.request_key(_uid(connection),msg["channel_id"],msg["device_id"]); await store.changed("key_request",request=result)
     except (PermissionError,KeyError) as err: _error(connection,msg["id"],str(err))
     else: _result(connection,msg["id"],{"state":"waiting_for_device","request_id":result["id"]})
+
+@websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/key/reset", vol.Required("channel_id"): str, vol.Required("device_id"): str, vol.Required("expected_epoch"): int})
+@websocket_api.async_response
+async def _key_reset(hass, connection, msg):
+    store=_store(hass); channel=store.data["channels"].get(msg["channel_id"],{})
+    try:
+        epoch=store.domain.reset_channel_key(_uid(connection),msg["channel_id"],msg["device_id"],msg["expected_epoch"],_admins(connection))
+        await store.changed("key_reset",channel_id=msg["channel_id"],key_epoch=epoch,user_ids=list(channel.get("members",[])),**{"global":not channel.get("restricted",True)})
+    except (PermissionError,ValueError,KeyError) as err: _error(connection,msg["id"],str(err))
+    else: _result(connection,msg["id"],{"key_epoch":epoch})
 
 @websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/settings", vol.Optional("enabled"): bool, vol.Optional("allow_users"): bool, vol.Optional("allowed_users"): [str], vol.Optional("retention_days"): int, vol.Optional("encryption_enabled"): bool, vol.Optional("show_security_details"): bool, vol.Optional("show_deleted_messages"): bool})
 @websocket_api.require_admin
