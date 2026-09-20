@@ -12,11 +12,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     return True
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    await async_register_panel(hass, entry.entry_id)
     store = ChatStore(hass, entry)
     await store.async_load()
     hass.data[DOMAIN][entry.entry_id] = store
     await store.async_register()
+    await async_register_panel(hass, entry.entry_id)
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
