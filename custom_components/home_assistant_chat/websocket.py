@@ -38,12 +38,12 @@ async def _state(hass, connection, msg):
         if source.get("kind")=="private":
             peer_id=next((member for member in source.get("members",[]) if member!=uid),None)
             channel["peer"]={"id":peer_id,"name":names.get(peer_id,"User")} if peer_id else None
-    visible={c["id"] for c in channels}; messages=[{**m,"sender_name":names.get(m["sender_id"],"User")} for m in store.data["messages"].values() if m["channel_id"] in visible and not m["deleted"]]
+    visible={c["id"] for c in channels}; messages=[{**m,"sender_name":names.get(m["sender_id"],"User")} for m in store.data["messages"].values() if m["channel_id"] in visible and (not m["deleted"] or settings["show_deleted_messages"])]
     devices=[]
     source=store.data["devices"].items() if admins else [(uid,store.data["devices"].get(uid,{}))]
     for owner, owned in source:
         for device in owned.values(): devices.append({k:v for k,v in device.items() if admins or k != "public_key"})
-    _result(connection,msg["id"],{"protocol_version":PROTOCOL_VERSION,"server_id":store.data["server_id"],"user_id":uid,"channels":channels,"messages":messages,"devices":devices,"seen":store.data["seen"].get(uid,{}),"is_admin":bool(admins),"is_muted":bool(store.data["mutes"].get(uid)),"settings":{"enabled":settings["enabled"],"allow_users":settings["allow_users"],"retention_days":settings["retention_days"],"encryption_enabled":settings["encryption_enabled"],"show_security_details":settings["show_security_details"]}})
+    _result(connection,msg["id"],{"protocol_version":PROTOCOL_VERSION,"server_id":store.data["server_id"],"user_id":uid,"channels":channels,"messages":messages,"devices":devices,"seen":store.data["seen"].get(uid,{}),"is_admin":bool(admins),"is_muted":bool(store.data["mutes"].get(uid)),"settings":{"enabled":settings["enabled"],"allow_users":settings["allow_users"],"retention_days":settings["retention_days"],"encryption_enabled":settings["encryption_enabled"],"show_security_details":settings["show_security_details"],"show_deleted_messages":settings["show_deleted_messages"]}})
 
 @websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/subscribe", vol.Optional("channel_id"): str})
 @websocket_api.async_response
@@ -129,7 +129,7 @@ async def _channel_members(hass, connection, msg):
 async def _message_delete(hass, connection, msg):
     store=_store(hass)
     channel_id=store.data["messages"].get(msg["message_id"],{}).get("channel_id")
-    try: store.domain.delete_message(_uid(connection),msg["message_id"],_admins(connection)); await store.changed("message_deleted",message_id=msg["message_id"],channel_id=channel_id)
+    try: store.domain.delete_message(_uid(connection),msg["message_id"],_admins(connection),store.settings()["show_deleted_messages"]); await store.changed("message_deleted",message_id=msg["message_id"],channel_id=channel_id)
     except (PermissionError,KeyError) as err: _error(connection,msg["id"],str(err))
     else: _result(connection,msg["id"])
 
@@ -251,10 +251,12 @@ async def _key_request(hass, connection, msg):
     except (PermissionError,KeyError) as err: _error(connection,msg["id"],str(err))
     else: _result(connection,msg["id"],{"state":"waiting_for_device","request_id":result["id"]})
 
-@websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/settings", vol.Optional("enabled"): bool, vol.Optional("allow_users"): bool, vol.Optional("allowed_users"): [str], vol.Optional("retention_days"): int, vol.Optional("encryption_enabled"): bool, vol.Optional("show_security_details"): bool})
+@websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/settings", vol.Optional("enabled"): bool, vol.Optional("allow_users"): bool, vol.Optional("allowed_users"): [str], vol.Optional("retention_days"): int, vol.Optional("encryption_enabled"): bool, vol.Optional("show_security_details"): bool, vol.Optional("show_deleted_messages"): bool})
 @websocket_api.require_admin
 @websocket_api.async_response
 async def _settings(hass, connection, msg):
-    store=_store(hass); updates={k:v for k,v in msg.items() if k in {"enabled","allow_users","retention_days","encryption_enabled","show_security_details"}}
+    store=_store(hass); updates={k:v for k,v in msg.items() if k in {"enabled","allow_users","retention_days","encryption_enabled","show_security_details","show_deleted_messages"}}
     if "allowed_users" in msg: store.data["users"]["allowed"] = msg["allowed_users"] or None
+    if msg.get("show_deleted_messages") is False:
+        for message_id in [message_id for message_id,message in store.data["messages"].items() if message.get("deleted")]: store.data["messages"].pop(message_id)
     hass.config_entries.async_update_entry(store.entry, options={**store.entry.options, **updates}); await store.changed("settings",**{"global":True}); _result(connection,msg["id"],store.settings())

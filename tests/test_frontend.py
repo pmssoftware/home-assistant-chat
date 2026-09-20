@@ -43,3 +43,12 @@ def test_chat_actions_and_composer_use_the_requested_layout():
     assert ':host{display:block;height:100dvh' in source
     assert '.messages{flex:1;min-height:0;overflow:auto' in source
     assert '.compose{display:flex;flex:0 0 auto' in source
+
+def test_deleted_message_markers_are_localized_and_admin_configurable():
+    source = JS.read_text()
+    assert 'messageDeleted:"Message deleted"' in source
+    assert 'messageDeleted:"Nachricht gelöscht"' in source
+    assert 'id="setting-deleted-markers"' in source
+    assert 'show_deleted_messages:content.querySelector("#setting-deleted-markers").checked' in source
+    assert '!message.deleted && message.sender_id === this._state?.user_id' in source
+    assert '[data-message]:not(.deleted)' in source

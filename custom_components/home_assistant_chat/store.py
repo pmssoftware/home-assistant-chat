@@ -54,7 +54,7 @@ class ChatStore:
         await self._store.async_save(self.data)
 
     def settings(self) -> dict[str, Any]:
-        return {key:self.entry.options.get(key, self.entry.data.get(key, default)) for key,default in {"enabled":True,"allow_users":True,"retention_days":0,"encryption_enabled":True,"show_security_details":False}.items()}
+        return {key:self.entry.options.get(key, self.entry.data.get(key, default)) for key,default in {"enabled":True,"allow_users":True,"retention_days":0,"encryption_enabled":True,"show_security_details":False,"show_deleted_messages":True}.items()}
     def can_use(self, user_id: str) -> bool:
         allowed=self.data.get("users",{}).get("allowed")
         return self.settings()["enabled"] and self.settings()["allow_users"] and (allowed is None or user_id in allowed)

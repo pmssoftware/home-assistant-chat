@@ -46,3 +46,12 @@ def test_delete_announcements_and_envelope():
     d.delete_message("admin",msg["id"],admins)
     assert d.data["messages"][msg["id"]]["ciphertext"] == ""
     validate_envelope("Y2lwaGVy",envelope())
+
+def test_users_delete_only_their_own_messages_and_can_purge_without_marker():
+    d=ChatDomain.fresh(); d.register_device("user","device-a","public-key")
+    msg=d.add_message("user","public","Y2lwaGVy",envelope(),{"admin"})
+    try: d.delete_message("admin",msg["id"],{"admin"})
+    except PermissionError as err: assert str(err) == "message_access"
+    else: assert False
+    d.delete_message("user",msg["id"],{"admin"},keep_marker=False)
+    assert msg["id"] not in d.data["messages"]

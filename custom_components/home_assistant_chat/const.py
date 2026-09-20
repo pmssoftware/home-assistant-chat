@@ -19,3 +19,4 @@ class ChatConfig:
     retention_days: int = 0
     encryption_enabled: bool = True
     show_security_details: bool = False
+    show_deleted_messages: bool = True
