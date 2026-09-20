@@ -15,6 +15,16 @@ def test_encryption_storage_and_protocol_markers():
     domain = (ROOT / "custom_components/home_assistant_chat/domain.py").read_text()
     assert "origin_server_id" in domain and "protocol_version" in domain and "ciphertext" in domain
 
+def test_browser_key_store_migrates_legacy_identity_and_channel_keys():
+    source = JS.read_text()
+    assert 'indexedDB.open("ha-chat-device-v1", 2)' in source
+    assert 'key === "identity"' in source
+    assert '["device", {...value, id:value.id || value.deviceId}]' in source
+    assert 'key.startsWith("channel:")' in source
+    assert '`key:${key.slice("channel:".length)}`' in source
+    assert 'objectStoreNames.contains("v")' in source
+    assert 'migrateStorage(transaction,"values",target)' in source
+
 def test_admin_bindings_and_csp_safe_markup():
     source=JS.read_text()
     assert 'dialog.querySelectorAll("[data-tab]")' in source

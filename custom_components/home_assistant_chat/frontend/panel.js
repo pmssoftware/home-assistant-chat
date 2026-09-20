@@ -45,10 +45,31 @@ const STRINGS = {
   }
 };
 
+function migratedStorageEntry(key, value) {
+  if (key === "identity") return ["device", {...value, id:value.id || value.deviceId}];
+  if (typeof key === "string" && key.startsWith("channel:")) return [`key:${key.slice("channel:".length)}`, value];
+  return [key, value];
+}
+
+function migrateStorage(transaction, sourceName, target) {
+  const cursorRequest = transaction.objectStore(sourceName).openCursor();
+  cursorRequest.onsuccess = () => {
+    const cursor = cursorRequest.result; if (!cursor) return;
+    const [key, value] = migratedStorageEntry(cursor.key, cursor.value);
+    if (sourceName !== "values" || key !== cursor.key) target.put(value, key);
+    cursor.continue();
+  };
+}
+
 function openDatabase() {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open("ha-chat-device-v1", 1);
-    request.onupgradeneeded = () => request.result.createObjectStore("values");
+    const request = indexedDB.open("ha-chat-device-v1", 2);
+    request.onupgradeneeded = () => {
+      const database=request.result; const transaction=request.transaction;
+      const target=database.objectStoreNames.contains("values") ? transaction.objectStore("values") : database.createObjectStore("values");
+      if (database.objectStoreNames.contains("v")) migrateStorage(transaction,"v",target);
+      migrateStorage(transaction,"values",target);
+    };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
