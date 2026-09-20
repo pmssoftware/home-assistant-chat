@@ -33,9 +33,15 @@ def test_registered_panel_name_matches_custom_element():
     assert match
     assert f'customElements.define("{match.group(1)}"' in JS.read_text()
 
+def test_panel_url_is_cache_busted_by_manifest_version():
+    panel_source = (ROOT / "custom_components/home_assistant_chat/panel.py").read_text()
+    assert 'manifest.json' in panel_source
+    assert 'module_url=f"{STATIC_PATH}/panel.js?v={quote(_frontend_version()' in panel_source
+    assert 'StaticPathConfig(STATIC_PATH, str(www), False)' in panel_source
+
 def test_chat_actions_and_composer_use_the_requested_layout():
     source = JS.read_text()
-    assert '<div class="side-top"><h2>${text.chat}</h2><button class="button" id="new-private">' in source
+    assert '<div class="side-top"><h2>${text.chat}</h2><button class="button" id="new-private"' in source
     assert '<div class="header-actions">${this._state?.is_admin' in source
     assert 'height:var(--chat-header-height)' in source
     assert '<div class="message-head"><small>' in source
@@ -58,11 +64,33 @@ def test_role_specific_settings_windows():
 def test_private_chat_overflow_menu_contains_contact_actions():
     source = JS.read_text()
     assert 'icon="mdi:dots-vertical"' in source
-    assert 'id="private-info"' in source
-    assert 'id="silence-private"' in source
-    assert 'id="block-private"' in source
-    assert 'id="delete-private"' in source
+    assert 'class="button private-info"' in source
+    assert 'class="button silence-private"' in source
+    assert 'class="button danger block-private"' in source
+    assert 'class="button danger delete-private"' in source
     assert 'home_assistant_chat/private/silence' in source
+    assert 'this.privateMenu(channel,"sidebar")' in source
+    assert 'this.privateMenu(current)' in source
+
+def test_private_chats_use_the_contact_name_instead_of_generic_label():
+    source = JS.read_text()
+    assert 'if (channel?.kind === "private") return channel.peer?.name || this.text.private' in source
+    assert 'current?.kind === "private" && peer' in source
+    assert '<span class="peer-avatar">${esc(initials(peer.name))}</span><h3>${esc(peer.name)}</h3>' in source
+
+def test_compact_icon_controls():
+    source = JS.read_text()
+    assert 'id="new-private" aria-label="${esc(text.private)}" title="${esc(text.private)}">+</button>' in source
+    assert '.delete-message{display:grid;place-items:center;flex:0 0 28px;width:28px;height:28px;padding:0;border:0;background:transparent}' in source
+    assert '.delete-message ha-icon{--mdc-icon-size:18px}' in source
+
+def test_default_channel_names_follow_home_assistant_language():
+    source = JS.read_text()
+    assert 'announcements:"Announcements"' in source
+    assert 'announcements:"Ankündigungen"' in source
+    assert 'if (channel?.id === "public") return this.text.publicChat' in source
+    assert 'if (channel?.id === "announcements") return this.text.announcements' in source
+    assert '${esc(this.channelName(channel))}' in source
 
 def test_deleted_message_markers_are_localized_and_admin_configurable():
     source = JS.read_text()
