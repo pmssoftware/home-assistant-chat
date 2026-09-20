@@ -32,3 +32,14 @@ def test_registered_panel_name_matches_custom_element():
     match = re.search(r'PANEL_NAME\s*=\s*"([^"]+)"', panel_source)
     assert match
     assert f'customElements.define("{match.group(1)}"' in JS.read_text()
+
+def test_chat_actions_and_composer_use_the_requested_layout():
+    source = JS.read_text()
+    assert '<aside class="side"><h2>${text.chat}</h2>${channels.map' in source
+    assert '<div class="header-actions"><button class="button" id="new-private">' in source
+    assert '<div class="message-head"><small>' in source
+    assert '<ha-icon icon="mdi:delete-outline"' in source
+    assert 'aria-label="${esc(text.delete)}"' in source
+    assert ':host{display:block;height:100dvh' in source
+    assert '.messages{flex:1;min-height:0;overflow:auto' in source
+    assert '.compose{display:flex;flex:0 0 auto' in source

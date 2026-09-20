@@ -8,7 +8,7 @@ A local-only Home Assistant custom integration with a native Chat sidebar panel.
 
 This is an experimental v1 implementation. It includes config flow, persistent local storage and migrations, push WebSocket transport, authorization-filtered channels, exact-handle private-chat entry, public/restricted/announcement channel rules, moderation and blocking commands, user-seen tracking, browser device enrollment, AES-GCM message encryption, ECDH-wrapped channel-key offers, replay-resistant envelopes, and a browser device key vault.
 
-Current integration version: **0.1.1**
+Current integration version: **0.1.2**
 
 ## Installation with HACS
 
