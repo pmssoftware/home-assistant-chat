@@ -17,11 +17,13 @@ def test_encryption_storage_and_protocol_markers():
 
 def test_browser_key_store_migrates_legacy_identity_and_channel_keys():
     source = JS.read_text()
-    assert 'indexedDB.open("ha-chat-device-v1", 2)' in source
+    assert 'indexedDB.open("ha-chat-device-v1", 3)' in source
     assert 'key === "identity"' in source
-    assert '["device", {...value, id:value.id || value.deviceId}]' in source
+    assert 'primary:"device", legacy:"legacy-device"' in source
     assert 'key.startsWith("channel:")' in source
-    assert '`key:${key.slice("channel:".length)}`' in source
+    assert 'legacy:`legacy-key:${suffix}`' in source
+    assert 'existingRequest.result === undefined ? migrated.primary : migrated.legacy' in source
+    assert 'await dbGet(`legacy-key:${message.channel_id}:${epoch}`)' in source
     assert 'objectStoreNames.contains("v")' in source
     assert 'migrateStorage(transaction,"values",target)' in source
 

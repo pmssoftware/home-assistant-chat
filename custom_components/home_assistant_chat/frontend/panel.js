@@ -46,24 +46,31 @@ const STRINGS = {
 };
 
 function migratedStorageEntry(key, value) {
-  if (key === "identity") return ["device", {...value, id:value.id || value.deviceId}];
-  if (typeof key === "string" && key.startsWith("channel:")) return [`key:${key.slice("channel:".length)}`, value];
-  return [key, value];
+  if (key === "identity") return {primary:"device", legacy:"legacy-device", value:{...value, id:value.id || value.deviceId}};
+  if (typeof key === "string" && key.startsWith("channel:")) {
+    const suffix=key.slice("channel:".length);
+    return {primary:`key:${suffix}`, legacy:`legacy-key:${suffix}`, value};
+  }
+  return null;
 }
 
 function migrateStorage(transaction, sourceName, target) {
   const cursorRequest = transaction.objectStore(sourceName).openCursor();
   cursorRequest.onsuccess = () => {
     const cursor = cursorRequest.result; if (!cursor) return;
-    const [key, value] = migratedStorageEntry(cursor.key, cursor.value);
-    if (sourceName !== "values" || key !== cursor.key) target.put(value, key);
-    cursor.continue();
+    const migrated = migratedStorageEntry(cursor.key, cursor.value);
+    if (!migrated) { cursor.continue(); return; }
+    const existingRequest=target.get(migrated.primary);
+    existingRequest.onsuccess=() => {
+      target.put(migrated.value, existingRequest.result === undefined ? migrated.primary : migrated.legacy);
+      cursor.continue();
+    };
   };
 }
 
 function openDatabase() {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open("ha-chat-device-v1", 2);
+    const request = indexedDB.open("ha-chat-device-v1", 3);
     request.onupgradeneeded = () => {
       const database=request.result; const transaction=request.transaction;
       const target=database.objectStoreNames.contains("values") ? transaction.objectStore("values") : database.createObjectStore("values");
@@ -144,11 +151,11 @@ async function encryptMessage(channelId, epoch, text) {
 
 async function decryptMessage(message) {
   const epoch = message.envelope.key_id.split(":").pop();
-  const key = await channelKey(message.channel_id, epoch);
-  if (!key) return null;
-  try {
+  const keys=[await channelKey(message.channel_id, epoch),await dbGet(`legacy-key:${message.channel_id}:${epoch}`)].filter(Boolean);
+  for (const key of keys) try {
     return decoder.decode(await crypto.subtle.decrypt({name:"AES-GCM", iv:raw(message.envelope.nonce), additionalData:raw(message.envelope.aad)}, key, raw(message.ciphertext)));
-  } catch { return null; }
+  } catch { /* Try the key retained from the previous storage layout. */ }
+  return null;
 }
 
 async function keySecurityCode(key) {

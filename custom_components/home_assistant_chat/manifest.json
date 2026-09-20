@@ -1,7 +1,7 @@
 {
   "domain": "home_assistant_chat",
   "name": "Home Assistant Chat",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "codeowners": [],
   "config_flow": true,
   "single_config_entry": true,
