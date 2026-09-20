@@ -13,6 +13,8 @@ from typing import Any
 from .const import MAX_MESSAGE_LENGTH, PROTOCOL_VERSION
 
 HANDLE_RE = re.compile(r"^.{1,128}$", re.DOTALL)
+IDENTITY_RE = re.compile(r"^([1-9]\d{7})(?:@([^:]+)(?::(\d+))?)?$")
+MAX_RECOVERY_FIELD = 16384
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{secrets.token_urlsafe(18)}"
@@ -41,10 +43,10 @@ class ChatDomain:
     @classmethod
     def fresh(cls, server_id: str | None = None) -> "ChatDomain":
         sid = server_id or new_id("server")
-        return cls({"schema_version": 2, "server_id": sid, "channels": {
+        return cls({"schema_version": 4, "server_id": sid, "channels": {
             "public": {"id":"public","kind":"public","name":"Public chat","restricted":False,"members":[],"key_epoch":1},
             "announcements": {"id":"announcements","kind":"announcement","name":"Announcements","restricted":False,"members":[],"key_epoch":1},
-        }, "messages": {}, "blocks": {}, "mutes": {}, "silenced": {}, "devices": {}, "keys": {}, "key_requests": {}, "seen": {}, "replay": {}, "users": {"allowed": None}})
+        }, "messages": {}, "blocks": {}, "mutes": {}, "silenced": {}, "devices": {}, "keys": {}, "key_requests": {}, "seen": {}, "replay": {}, "users": {"allowed": None}, "identities": {}, "identity_users": {}, "recovery": {}})
 
     def migrate(self) -> bool:
         changed = False; version = self.data.get("schema_version", 0); defaults = self.fresh(self.data.get("server_id")).data
@@ -54,8 +56,54 @@ class ChatDomain:
         if announcements and announcements.get("restricted") is not False:
             announcements["restricted"] = False
             changed = True
-        if version < 2: self.data["schema_version"] = 2; changed = True
+        if version < 4: self.data["schema_version"] = 4; changed = True
+        if "identities" not in self.data: self.data["identities"] = {}; changed = True
+        if "identity_users" not in self.data: self.data["identity_users"] = {}; changed = True
+        repaired={}
+        for user_id, value in self.data["identities"].items():
+            try: number=int(value)
+            except (TypeError,ValueError): continue
+            if IDENTITY_RE.fullmatch(str(number)) and str(number) not in repaired: repaired[str(number)]=user_id
+        if repaired != self.data["identity_users"]: self.data["identity_users"]=repaired; changed=True
         return changed
+
+    def get_recovery_bundle(self, user_id: str) -> dict[str, Any] | None:
+        bundle=self.data.get("recovery", {}).get(user_id)
+        return dict(bundle) if bundle else None
+
+    def set_recovery_bundle(self, user_id: str, bundle: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(bundle, dict) or bundle.get("version") != 1: raise ValueError("invalid_recovery_bundle")
+        required={"version","ciphertext","salt","nonce","kdf"}
+        if set(bundle) != required: raise ValueError("invalid_recovery_bundle")
+        kdf=bundle.get("kdf")
+        if not isinstance(kdf,dict) or set(kdf)!={"name","hash","iterations"} or kdf.get("name") != "PBKDF2" or kdf.get("hash") != "SHA-256" or isinstance(kdf.get("iterations"),bool) or not isinstance(kdf.get("iterations"),int) or not 200000 <= kdf["iterations"] <= 1000000: raise ValueError("invalid_recovery_bundle")
+        for field in ("ciphertext","salt","nonce"):
+            if not isinstance(bundle.get(field), str) or not bundle[field] or len(bundle[field]) > MAX_RECOVERY_FIELD: raise ValueError("invalid_recovery_bundle")
+            try: decoded=base64.b64decode(bundle[field], validate=True)
+            except (ValueError, TypeError, base64.binascii.Error) as err: raise ValueError("invalid_recovery_bundle") from err
+            if field == "nonce" and len(decoded) != 12: raise ValueError("invalid_recovery_bundle")
+            if field == "salt" and not 16 <= len(decoded) <= 128: raise ValueError("invalid_recovery_bundle")
+            if field == "ciphertext" and not 16 <= len(decoded) <= MAX_RECOVERY_FIELD: raise ValueError("invalid_recovery_bundle")
+        stored={"version":1,"ciphertext":bundle["ciphertext"],"salt":bundle["salt"],"nonce":bundle["nonce"],"kdf":dict(kdf),"updated":time.time()}
+        self.data.setdefault("recovery", {})[user_id]=stored
+        return stored
+
+    def ensure_identity(self, user_id: str) -> int:
+        if user_id in self.data["identities"]:
+            number=int(self.data["identities"][user_id]); self.data["identity_users"][str(number)]=user_id; return number
+        used={int(value) for value in self.data["identities"].values()}
+        number=secrets.randbelow(90000000)+10000000
+        while number in used: number=secrets.randbelow(90000000)+10000000
+        self.data["identities"][user_id]=number; self.data["identity_users"][str(number)]=user_id
+        return number
+
+    def parse_identity(self, value: str) -> tuple[int, str | None]:
+        if not isinstance(value,str) or not HANDLE_RE.match(value): raise ValueError("invalid_identity")
+        match=IDENTITY_RE.fullmatch(value.strip())
+        if not match: return 0, None
+        number=int(match.group(1)); host=match.group(2)
+        if host: raise ValueError("federated_identity_not_supported")
+        return number, None
 
     def can_access(self, user_id: str, globally_enabled: bool, allowed_users: set[str] | None) -> bool:
         return globally_enabled and (allowed_users is None or user_id in allowed_users)
@@ -123,7 +171,8 @@ class ChatDomain:
 
     def resolve_private(self, actor: str, handle: str, users: list[dict[str, Any]], enabled: set[str], confirm_unblock: bool) -> dict[str, Any]:
         if not isinstance(handle, str) or not HANDLE_RE.match(handle): raise ValueError("invalid_handle")
-        matches = [u for u in users if u.get("enabled") and u.get("id") in enabled and u.get("name") == handle and u.get("id") != actor]
+        number,_ = self.parse_identity(handle)
+        matches = [u for u in users if u.get("enabled") and u.get("id") in enabled and u.get("id") != actor and ((number and self.ensure_identity(u["id"]) == number) or (not number and u.get("name") == handle))]
         if len(matches) != 1: raise ValueError("invalid_handle")
         target = matches[0]["id"]; own = set(self.data["blocks"].get(actor, [])); own_block = target in own
         if own_block and not confirm_unblock: raise PermissionError("confirm_unblock")
@@ -131,7 +180,7 @@ class ChatDomain:
         if actor in self.data["blocks"].get(target, []): raise PermissionError("blocked_by_other")
         cid = "dm_" + "_".join(sorted((actor, target)))
         self.data["channels"].setdefault(cid, {"id":cid,"kind":"private","name":"Private chat","restricted":True,"members":sorted((actor,target)),"key_epoch":1})
-        return {"channel":self.data["channels"][cid],"user":{"id":target,"name":handle},"unblocked":own_block}
+        return {"channel":self.data["channels"][cid],"user":{"id":target,"identity":str(self.ensure_identity(target)),"name":handle},"unblocked":own_block}
 
     def add_block(self, actor: str, target: str) -> None:
         blocks=set(self.data["blocks"].get(actor, [])); blocks.add(target); self.data["blocks"][actor]=sorted(blocks)

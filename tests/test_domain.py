@@ -17,8 +17,44 @@ def env(device="d",counter=1,key="public:1"):
 def test_migration_adds_new_collections_and_defaults():
     d=ChatDomain({"schema_version":0,"server_id":"server_old","channels":{},"messages":{}})
     assert d.migrate()
-    assert d.data["schema_version"] == 2
+    assert d.data["schema_version"] == 4
     assert {"blocks","mutes","devices","keys","seen","replay","users"} <= d.data.keys()
+
+def test_migration_repairs_identity_reverse_index():
+    d=ChatDomain({"schema_version":2,"server_id":"s","identities":{"alice":12345678},"identity_users":{"12345678":"wrong","99999999":"stale"}})
+    assert d.migrate(); assert d.data["identity_users"] == {"12345678":"alice"}
+    assert d.ensure_identity("alice") == 12345678
+
+def test_recovery_bundle_is_opaque_isolated_validated_and_migrated():
+    d=ChatDomain({"schema_version":3,"server_id":"s","recovery":{"alice":{"version":1,"ciphertext":"YQ==","salt":"Yg==","nonce":"Yw==","kdf":{},"updated":1}}})
+    assert d.migrate() and d.get_recovery_bundle("alice")["ciphertext"] == "YQ=="
+    assert d.get_recovery_bundle("bob") is None
+    import base64
+    bundle={"version":1,"ciphertext":base64.b64encode(b"ciphertext-value").decode(),"salt":base64.b64encode(b"0123456789abcdef").decode(),"nonce":base64.b64encode(b"0123456789ab").decode(),"kdf":{"name":"PBKDF2","hash":"SHA-256","iterations":200000}}
+    stored=d.set_recovery_bundle("bob",bundle)
+    assert stored["updated"] > 0 and d.get_recovery_bundle("alice")["ciphertext"] == "YQ=="
+    try:d.set_recovery_bundle("bob",{"version":1,"ciphertext":"not-base64","salt":"Yg==","nonce":"Yw==","kdf":{}})
+    except ValueError as err: assert str(err) == "invalid_recovery_bundle"
+    else: assert False
+    bad=dict(bundle); bad["kdf"]={"name":"PBKDF2","hash":"SHA-256","iterations":True}
+    try:d.set_recovery_bundle("bob",bad)
+    except ValueError as err: assert str(err) == "invalid_recovery_bundle"
+    else: assert False
+
+def test_numeric_identities_are_stable_unique_and_parse_federated_syntax():
+    d=ChatDomain.fresh("server"); first=d.ensure_identity("alice"); assert d.ensure_identity("alice")==first
+    second=d.ensure_identity("bob"); assert second != first and d.data["identity_users"][str(first)] == "alice"
+    assert d.parse_identity(str(first)) == (first,None)
+    try:d.parse_identity(f"{first}@remote.example:8123")
+    except ValueError as err: assert str(err) == "federated_identity_not_supported"
+    else: assert False
+
+def test_private_chat_resolves_numeric_identity_and_preserves_name_lookup():
+    d=ChatDomain.fresh(); d.ensure_identity("alice"); number=d.ensure_identity("bob")
+    users=[{"id":"alice","name":"Alice","enabled":True},{"id":"bob","name":"Bob","enabled":True}]
+    result=d.resolve_private("alice",str(number),users,{"alice","bob"},False)
+    assert result["channel"]["members"] == ["alice","bob"]
+    assert d.resolve_private("alice","Bob",users,{"alice","bob"},False)["channel"]["id"] == result["channel"]["id"]
 
 def test_replay_protection_and_key_epoch_rotation():
     d=ChatDomain.fresh();d.register_device("admin","d","pub")

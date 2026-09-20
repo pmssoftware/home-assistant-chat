@@ -53,6 +53,9 @@ class ChatStore:
         for listener in tuple(self._listeners): listener({"event":event, **payload})
         await self._store.async_save(self.data)
 
+    async def async_save(self) -> None:
+        await self._store.async_save(self.data)
+
     def settings(self) -> dict[str, Any]:
         return {key:self.entry.options.get(key, self.entry.data.get(key, default)) for key,default in {"enabled":True,"allow_users":True,"retention_days":0,"encryption_enabled":True,"show_security_details":False,"show_deleted_messages":True}.items()}
     def can_use(self, user_id: str) -> bool:

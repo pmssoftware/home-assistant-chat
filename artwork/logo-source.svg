@@ -1,13 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 100">
   <rect width="250" height="100" rx="20" fill="#18a3e0"/>
   <g transform="translate(7 7) scale(.68)">
-    <path d="M25 31h63a12 12 0 0 1 12 12v35a12 12 0 0 1-12 12H57L38 105V90H25a12 12 0 0 1-12-12V43a12 12 0 0 1 12-12Z" fill="none" stroke="#fff" stroke-width="8" stroke-linejoin="round"/>
-    <circle cx="39" cy="60" r="5" fill="#fff"/>
-    <circle cx="57" cy="60" r="5" fill="#fff"/>
-    <circle cx="75" cy="60" r="5" fill="#fff"/>
-    <circle cx="87" cy="84" r="19" fill="#0878aa"/>
-    <rect x="77.5" y="81" width="19" height="15" rx="3.5" fill="#fff"/>
-    <path d="M81 82v-4a6 6 0 0 1 12 0v4" fill="none" stroke="#fff" stroke-width="4.5" stroke-linecap="round"/>
+    <g transform="translate(6 -3)">
+      <path d="M25 31h63a12 12 0 0 1 12 12v35a12 12 0 0 1-12 12H57L38 105V90H25a12 12 0 0 1-12-12V43a12 12 0 0 1 12-12Z" fill="none" stroke="#fff" stroke-width="8" stroke-linejoin="round"/>
+      <circle cx="39" cy="60" r="5" fill="#fff"/>
+      <circle cx="57" cy="60" r="5" fill="#fff"/>
+      <circle cx="75" cy="60" r="5" fill="#fff"/>
+    </g>
+    <g transform="translate(2 -3)">
+      <circle cx="87" cy="84" r="19" fill="#0878aa"/>
+      <rect x="77.5" y="81" width="19" height="15" rx="3.5" fill="#fff"/>
+      <path d="M81 82v-4a6 6 0 0 1 12 0v4" fill="none" stroke="#fff" stroke-width="4.5" stroke-linecap="round"/>
+    </g>
   </g>
   <text x="94" y="43" fill="#fff" font-family="sans-serif" font-size="18" font-weight="700">Home Assistant</text>
   <text x="94" y="66" fill="#e7f7fe" font-family="sans-serif" font-size="13">Chat</text>

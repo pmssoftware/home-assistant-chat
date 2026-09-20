@@ -5,10 +5,13 @@ const b64 = (value) => btoa(String.fromCharCode(...new Uint8Array(value)));
 const raw = (value) => Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
 const initials = (value) => String(value || "?").trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+// Local identities are numeric; federation appends a host and optional port.
+const IDENTITY_RE = /^[1-9]\d{7}(?:@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::\d{1,5})?)?$/;
+const validIdentity = (value) => IDENTITY_RE.test(String(value || "").trim());
 
 const STRINGS = {
   en: {
-    chat:"Chat", private:"Private chat", device:"Browser device", handle:"Exact enabled Home Assistant username", send:"Send", write:"Write a message",
+    chat:"Chat", private:"Private chat", device:"Browser device", handle:"Enter an identity number (for example 48392017 or 48392017@example.org:8123).", identityNumber:"Identity number", ownIdentity:"Your identity", copyIdentity:"Copy identity", copiedIdentity:"Copied", invalidIdentity:"Enter a valid identity number: NUMBER or NUMBER@HOST[:PORT].", federatedNotSupported:"Federated identities are not supported by this server yet.", send:"Send", write:"Write a message",
     cancel:"Cancel", continue:"Continue", delete:"Delete", deleteBoth:"Delete entire chat", block:"Block", close:"Close", admin:"Administration",
     channels:"Channels", moderation:"Moderation", users:"Users / Access", devices:"Devices / Encryption", settings:"Settings", name:"Name",
     members:"Members", create:"Create", edit:"Edit", save:"Save", mute:"Mute", unmute:"Unmute", revoke:"Revoke", unblock:"Unblock", blockedUsers:"Blocked users",
@@ -22,11 +25,11 @@ const STRINGS = {
     confirmRevoke:"Revoke this encrypted device?", owner:"Owner", ready:"Encrypted", experimental:"experimental", activeChannel:"Active channel",
     defaultChannel:"Default channel", cannotPost:"You cannot post in this channel.", noUsers:"No users found", noDevices:"No encrypted devices found", noChannels:"No channels found",
     messageDeleted:"Message deleted", showDeletedMessages:"Show a marker for deleted messages", userSettingsHint:"Manage the people you have blocked.",
-    contactInfo:"Contact info", silence:"Silence", unsilence:"Unmute", userIdentifier:"Home Assistant user ID", moreOptions:"More options", announcements:"Announcements",
+    contactInfo:"Contact info", silence:"Silence", unsilence:"Unmute", userIdentifier:"Home Assistant user ID", moreOptions:"More options", announcements:"Announcements", recovery:"Encrypted recovery", createRecovery:"Create recovery code", showRecovery:"Show recovery code", restoreRecovery:"Restore from recovery code", recoveryWarning:"Save this code somewhere safe. A new device needs it; the server cannot recover it.", recoveryUnavailable:"No recovery bundle is stored yet.", recoveryInvalid:"This recovery code could not decrypt the bundle.", recoveryUpdated:"Encrypted recovery bundle updated.", recoveryCodePlaceholder:"Paste recovery code",
     resetKey:"Start with a new key", confirmResetKey:"Create a new encryption key for this chat? Older messages whose keys cannot be recovered will remain unreadable, but new messages will work.", resetError:"Could not create a new encryption key. Please try again."
   },
   de: {
-    chat:"Chat", private:"Privater Chat", device:"Browser-Gerät", handle:"Exakter aktivierter Home-Assistant-Benutzername", send:"Senden",
+    chat:"Chat", private:"Privater Chat", device:"Browser-Gerät", handle:"Identitätsnummer eingeben (zum Beispiel 48392017 oder 48392017@example.org:8123).", identityNumber:"Identitätsnummer", ownIdentity:"Deine Identität", copyIdentity:"Identität kopieren", copiedIdentity:"Kopiert", invalidIdentity:"Gib eine gültige Identitätsnummer ein: NUMMER oder NUMMER@HOST[:PORT].", federatedNotSupported:"Föderierte Identitäten werden von diesem Server noch nicht unterstützt.", send:"Senden",
     write:"Nachricht schreiben", cancel:"Abbrechen", continue:"Weiter", delete:"Löschen", deleteBoth:"Gesamten Chat löschen", block:"Blockieren",
     close:"Schließen", admin:"Administration", channels:"Kanäle", moderation:"Moderation", users:"Benutzer / Zugriff", devices:"Geräte / Verschlüsselung",
     settings:"Einstellungen", name:"Name", members:"Mitglieder", create:"Erstellen", edit:"Bearbeiten", save:"Speichern", mute:"Stummschalten", unblock:"Entsperren", blockedUsers:"Blockierte Benutzer",
@@ -42,7 +45,7 @@ const STRINGS = {
     activeChannel:"Aktiver Kanal", defaultChannel:"Standardkanal", cannotPost:"Du kannst in diesem Kanal nicht schreiben.",
     noUsers:"Keine Benutzer gefunden", noDevices:"Keine verschlüsselten Geräte gefunden", noChannels:"Keine Kanäle gefunden",
     messageDeleted:"Nachricht gelöscht", showDeletedMessages:"Markierung für gelöschte Nachrichten anzeigen", userSettingsHint:"Verwalte die von dir blockierten Benutzer.",
-    contactInfo:"Kontaktinformationen", silence:"Stummschalten", unsilence:"Stummschaltung aufheben", userIdentifier:"Home-Assistant-Benutzer-ID", moreOptions:"Weitere Optionen", announcements:"Ankündigungen",
+    contactInfo:"Kontaktinformationen", silence:"Stummschalten", unsilence:"Stummschaltung aufheben", userIdentifier:"Home-Assistant-Benutzer-ID", moreOptions:"Weitere Optionen", announcements:"Ankündigungen", recovery:"Verschlüsselte Wiederherstellung", createRecovery:"Wiederherstellungscode erstellen", showRecovery:"Wiederherstellungscode anzeigen", restoreRecovery:"Mit Wiederherstellungscode wiederherstellen", recoveryWarning:"Bewahre diesen Code sicher auf. Ein neues Gerät benötigt ihn; der Server kann ihn nicht wiederherstellen.", recoveryUnavailable:"Noch kein Wiederherstellungsbundle gespeichert.", recoveryInvalid:"Dieser Wiederherstellungscode konnte das Bundle nicht entschlüsseln.", recoveryUpdated:"Verschlüsseltes Wiederherstellungsbundle aktualisiert.", recoveryCodePlaceholder:"Wiederherstellungscode einfügen",
     resetKey:"Mit neuem Schlüssel fortfahren", confirmResetKey:"Einen neuen Verschlüsselungsschlüssel für diesen Chat erstellen? Ältere Nachrichten ohne wiederherstellbaren Schlüssel bleiben unlesbar, aber neue Nachrichten funktionieren wieder.", resetError:"Der neue Verschlüsselungsschlüssel konnte nicht erstellt werden. Bitte versuche es erneut."
   }
 };
@@ -100,6 +103,26 @@ async function dbPut(key, value) {
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
   });
+}
+
+// IndexedDB has no portable startsWith query, so enumerate the small local key
+// store and filter in memory. This never uploads the keys themselves.
+async function dbEntriesWithPrefix(prefix) {
+  const database = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const result = [];
+    const request = database.transaction("values").objectStore("values").openCursor();
+    request.onsuccess = () => { const cursor = request.result; if (!cursor) { resolve(result); return; } if (String(cursor.key).startsWith(prefix)) result.push([String(cursor.key), cursor.value]); cursor.continue(); };
+    request.onerror = () => reject(request.error);
+  });
+}
+
+const base64Url = (bytes) => b64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+const fromBase64Url = (value) => raw(String(value).replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(String(value).length / 4) * 4, "="));
+
+async function recoveryKeyFromCode(code, salt, iterations) {
+  const material = await crypto.subtle.importKey("raw", encoder.encode(code), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey({name:"PBKDF2", salt, iterations, hash:"SHA-256"}, material, {name:"AES-GCM", length:256}, false, ["encrypt", "decrypt"]);
 }
 
 async function deviceIdentity() {
@@ -179,7 +202,7 @@ class HomeAssistantChatPanel extends HTMLElement {
     try {
       const identity = await deviceIdentity();
       await this.ws({type:"home_assistant_chat/device/register", device_id:identity.id, public_key:JSON.stringify(identity.publicKey), label:this.text.device});
-      await this.refreshState(); await this.claimOffers(); await this.selectChannel(this._active);
+      await this.refreshState(); await this.claimOffers(); if (await dbGet("recovery-code")) await this.updateRecoveryBundle(); await this.selectChannel(this._active);
       this._unsubscribe = await this._hass.connection.subscribeMessage((event) => this.handleEvent(event), {type:"home_assistant_chat/subscribe"});
     } catch { this._error = this.text.unavailable; this.render(); }
   }
@@ -198,25 +221,30 @@ class HomeAssistantChatPanel extends HTMLElement {
       const channel = this._channels.find((item) => item.id === event.request.channel_id);
       if (channel) await this.shareKey(channel.id, channel.key_epoch || 1);
     }
-    if (event.event === "key_offer") await this.claimOffers();
+    if (event.event === "key_offer") { const imported = await this.claimOffers(); if (imported) await this.updateRecoveryBundle(); }
     await this.refreshState();
     if (this._active) await this.updateKeyState(this._active);
   }
 
   async claimOffers() {
     const identity = await deviceIdentity();
+    let imported = false;
     for (const channel of this._channels) {
       try {
         const state = await this.ws({type:"home_assistant_chat/key/state", channel_id:channel.id});
-        for (const group of Object.values(state.offers || {})) for (const offer of Object.values(group)) if (offer.device_id === identity.id) { await unwrapChannelKey(channel.id, offer); this._keyRequests.delete(`${channel.id}:${offer.key_id.split(":").pop()}`); }
+        for (const group of Object.values(state.offers || {})) for (const offer of Object.values(group)) if (offer.device_id === identity.id) {
+          const epoch = offer.key_id.split(":").pop(); if (await channelKey(channel.id, epoch)) continue;
+          await unwrapChannelKey(channel.id, offer); imported = true; this._keyRequests.delete(`${channel.id}:${epoch}`);
+        }
       } catch { /* inaccessible channels are omitted */ }
     }
+    return imported;
   }
 
   async updateKeyState(channelId) {
     const channel = this._channels.find((item) => item.id === channelId); if (!channel) return;
     try {
-      await this.claimOffers(); this._keyState = await this.ws({type:"home_assistant_chat/key/state", channel_id:channelId});
+      const imported = await this.claimOffers(); if (imported) await this.updateRecoveryBundle(); this._keyState = await this.ws({type:"home_assistant_chat/key/state", channel_id:channelId});
       const key = await channelKey(channelId, channel.key_epoch || 1); this._securityCode = await keySecurityCode(key); const hasMessages = this._messages.some((message) => message.channel_id === channelId);
       this._waiting = !key && hasMessages;
       const requestKey = `${channelId}:${channel.key_epoch || 1}`;
@@ -249,7 +277,7 @@ class HomeAssistantChatPanel extends HTMLElement {
         const identity=await deviceIdentity();
         const result=await this.ws({type:"home_assistant_chat/key/reset",channel_id:channel.id,device_id:identity.id,expected_epoch:channel.key_epoch || 1});
         const key=await channelKey(channel.id,result.key_epoch,true);
-        this._keyRequests.delete(`${channel.id}:${channel.key_epoch || 1}`); await this.refreshState(); await this.shareKey(channel.id,result.key_epoch); this._securityCode=await keySecurityCode(key); this._waiting=false; this.render();
+        this._keyRequests.delete(`${channel.id}:${channel.key_epoch || 1}`); await this.refreshState(); await this.shareKey(channel.id,result.key_epoch); await this.updateRecoveryBundle(); this._securityCode=await keySecurityCode(key); this._waiting=false; this.render();
       } catch { this._error = this.text.resetError; this.render(); }
     });
   }
@@ -273,20 +301,100 @@ class HomeAssistantChatPanel extends HTMLElement {
     const value = input.value.trim(); if (!channel || !value || this.cannotPost(channel)) return; const epoch = channel.key_epoch || 1;
     try {
       if (!await channelKey(channel.id, epoch) && this._messages.some((message) => message.channel_id === channel.id)) { this._waiting = true; await this.updateKeyState(channel.id); return; }
-      const encrypted = await encryptMessage(channel.id, epoch, value); await this.shareKey(channel.id, epoch);
+      const encrypted = await encryptMessage(channel.id, epoch, value); await this.shareKey(channel.id, epoch); await this.updateRecoveryBundle();
       await this.ws({type:"home_assistant_chat/send", channel_id:channel.id, ...encrypted}); input.value = "";
     } catch { this._error = this.text.unavailable; this.render(); }
   }
 
+  identityValue() { return String(this._state?.identity || ""); }
+
+  identityMarkup() {
+    const identity = this.identityValue();
+    return `<div class="identity-card"><span>${this.text.ownIdentity}</span><code>${esc(identity || "—")}</code>${identity ? `<button class="button copy-identity" data-identity="${esc(identity)}" type="button">${this.text.copyIdentity}</button>` : ""}</div>`;
+  }
+
+  bindIdentityCopy(container) {
+    container.querySelectorAll(".copy-identity").forEach((button) => button.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(button.dataset.identity); button.textContent = this.text.copiedIdentity; } catch { /* clipboard permission is optional */ }
+    }));
+  }
+
+  async createRecoveryCode() {
+    let code = await dbGet("recovery-code");
+    if (!code) { code = base64Url(crypto.getRandomValues(new Uint8Array(32))); await dbPut("recovery-code", code); this._recoveryFingerprint = null; }
+    await this.updateRecoveryBundle(code);
+    return code;
+  }
+
+  async updateRecoveryBundle(code = null) {
+    if (this._recoveryUpdating) return;
+    code = code || await dbGet("recovery-code"); if (!code) return;
+    this._recoveryUpdating = true;
+    try {
+      const entries = [];
+      for (const [storageKey, key] of await dbEntriesWithPrefix("key:")) {
+        try { entries.push({key_id:storageKey.slice(4), raw:base64Url(await crypto.subtle.exportKey("raw", key))}); } catch { /* non-exportable legacy keys are omitted */ }
+      }
+      entries.sort((a, b) => a.key_id.localeCompare(b.key_id));
+      const fingerprintInput = encoder.encode(entries.map((item) => `${item.key_id}\n${item.raw}`).join("\n"));
+      const fingerprint = base64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", fingerprintInput)));
+      if (this._recoveryFingerprint === fingerprint) return;
+      const payload = encoder.encode(JSON.stringify({version:1, keys:entries}));
+      const salt = crypto.getRandomValues(new Uint8Array(16)); const nonce = crypto.getRandomValues(new Uint8Array(12)); const iterations = 210000;
+      const wrappingKey = await recoveryKeyFromCode(code, salt, iterations);
+      const ciphertext = await crypto.subtle.encrypt({name:"AES-GCM", iv:nonce}, wrappingKey, payload);
+      await this.ws({type:"home_assistant_chat/recovery/set", bundle:{version:1, ciphertext:b64(ciphertext), salt:b64(salt), nonce:b64(nonce), kdf:{name:"PBKDF2", hash:"SHA-256", iterations}}});
+      this._recoveryFingerprint = fingerprint;
+    } finally { this._recoveryUpdating = false; }
+  }
+
+  async restoreRecovery(code) {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(String(code || ""))) throw new Error("recovery_invalid");
+    const bundle = await this.ws({type:"home_assistant_chat/recovery/get"});
+    if (!bundle) throw new Error("recovery_missing");
+    const iterations = Number(bundle.kdf?.iterations); let salt, nonce, ciphertext;
+    try { salt = raw(bundle.salt); nonce = raw(bundle.nonce); ciphertext = raw(bundle.ciphertext); } catch { throw new Error("recovery_invalid"); }
+    if (bundle.version !== 1 || bundle.kdf?.name !== "PBKDF2" || bundle.kdf?.hash !== "SHA-256" || !Number.isSafeInteger(iterations) || iterations < 200000 || iterations > 1000000 || salt.length < 16 || nonce.length !== 12 || !ciphertext.length) throw new Error("recovery_invalid");
+    const wrappingKey = await recoveryKeyFromCode(code, salt, iterations);
+    let decoded;
+    try { decoded = JSON.parse(decoder.decode(await crypto.subtle.decrypt({name:"AES-GCM", iv:nonce}, wrappingKey, ciphertext))); } catch { throw new Error("recovery_invalid"); }
+    if (decoded.version !== 1 || !Array.isArray(decoded.keys)) throw new Error("recovery_invalid");
+    for (const item of decoded.keys) {
+      if (typeof item?.key_id !== "string" || item.key_id.length > 200 || !/^[^:]{1,128}:\d{1,12}$/.test(item.key_id) || typeof item.raw !== "string" || !/^[A-Za-z0-9_-]+$/.test(item.raw)) throw new Error("recovery_invalid");
+      let keyBytes; try { keyBytes = fromBase64Url(item.raw); } catch { throw new Error("recovery_invalid"); }
+      if (keyBytes.length !== 32) throw new Error("recovery_invalid");
+      const key = await crypto.subtle.importKey("raw", keyBytes, {name:"AES-GCM"}, true, ["encrypt", "decrypt"]);
+      await dbPut(`key:${item.key_id}`, key);
+    }
+    await dbPut("recovery-code", code);
+    this._recoveryFingerprint = null; await this.refreshState(); await this.claimOffers(); if (this._active) await this.updateKeyState(this._active);
+  }
+
+  recoveryMarkup() {
+    return `<section class="recovery-section"><h4>${this.text.recovery}</h4><p>${this.text.recoveryWarning}</p><div class="actions recovery-actions" style="flex-wrap:wrap"><button class="button create-recovery">${this.text.createRecovery}</button><button class="button restore-recovery">${this.text.restoreRecovery}</button></div></section>`;
+  }
+
+  bindRecoveryActions(container) {
+    container.querySelector(".create-recovery")?.addEventListener("click", async (event) => {
+      const code = await this.createRecoveryCode(); const dialog = this.dialog(this.text.showRecovery, `<p>${this.text.recoveryWarning}</p><input class="recovery-code" style="width:100%;max-width:100%;font-family:monospace" readonly value="${esc(code)}">`, `<button class="button copy-recovery">${this.text.copyIdentity}</button><button class="button close">${this.text.close}</button>`);
+      dialog.querySelector(".copy-recovery").addEventListener("click", async () => { try { await navigator.clipboard.writeText(code); } catch {} }); dialog.querySelector(".close").addEventListener("click", () => dialog.remove());
+    });
+    container.querySelector(".restore-recovery")?.addEventListener("click", () => {
+      const dialog = this.dialog(this.text.restoreRecovery, `<p>${this.text.recoveryWarning}</p><input class="recovery-input" autocomplete="off" placeholder="${this.text.recoveryCodePlaceholder}"><p class="recovery-error" role="alert"></p>`, `<button class="button cancel">${this.text.cancel}</button><button class="button restore">${this.text.restoreRecovery}</button>`);
+      dialog.querySelector(".cancel").addEventListener("click", () => dialog.remove()); dialog.querySelector(".restore").addEventListener("click", async () => { try { await this.restoreRecovery(dialog.querySelector(".recovery-input").value.trim()); dialog.remove(); } catch { dialog.querySelector(".recovery-error").textContent = this.text.recoveryInvalid; } });
+    });
+  }
+
   privateDialog() {
-    const dialog = this.dialog(this.text.private, `<p>${this.text.handle}</p><input id="private-handle" autocomplete="off">`, `<button class="button cancel">${this.text.cancel}</button><button class="button start">${this.text.continue}</button>`);
+    const dialog = this.dialog(this.text.private, `<label>${this.text.identityNumber}<input id="private-handle" autocomplete="off" inputmode="text" placeholder="48392017 or 48392017@example.org:8123"></label><p>${this.text.handle}</p><p class="identity-error" role="alert"></p>`, `<button class="button cancel">${this.text.cancel}</button><button class="button start">${this.text.continue}</button>`);
     dialog.querySelector(".cancel").addEventListener("click", () => dialog.remove());
     dialog.querySelector(".start").addEventListener("click", async () => {
-      const handle = dialog.querySelector("#private-handle").value.trim(); dialog.remove();
-      try { const result = await this.ws({type:"home_assistant_chat/private", handle, confirm_unblock:false}); await this.refreshState(); await this.selectChannel(result.channel.id); }
+      const handle = dialog.querySelector("#private-handle").value.trim();
+      if (!validIdentity(handle)) { dialog.querySelector(".identity-error").textContent = this.text.invalidIdentity; return; }
+      try { const result = await this.ws({type:"home_assistant_chat/private", handle, confirm_unblock:false}); dialog.remove(); await this.refreshState(); await this.selectChannel(result.channel.id); }
       catch (error) {
         if (String(error?.code || error?.message).includes("confirm_unblock")) this.confirmDialog(this.text.confirmUnblock, this.text.continue, async () => { const result = await this.ws({type:"home_assistant_chat/private", handle, confirm_unblock:true}); await this.refreshState(); await this.selectChannel(result.channel.id); });
-        else { this._error = this.text.unavailable; this.render(); }
+        else { dialog.remove(); this._error = String(error?.code || error?.message).includes("federated_identity_not_supported") ? this.text.federatedNotSupported : String(error?.code || error?.message).includes("invalid_identity") ? this.text.invalidIdentity : this.text.unavailable; this.render(); }
       }
     });
   }
@@ -302,7 +410,7 @@ class HomeAssistantChatPanel extends HTMLElement {
 
   privateInfoDialog(channel) {
     if (!channel?.peer) return;
-    const dialog = this.dialog(this.text.contactInfo, `<div class="row"><span>${this.text.name}</span><strong>${esc(channel.peer.name)}</strong></div><div class="row"><span>${this.text.userIdentifier}</span><code>${esc(channel.peer.id)}</code></div>`, `<button class="button close">${this.text.close}</button>`);
+    const dialog = this.dialog(this.text.contactInfo, `<div class="row"><span>${this.text.name}</span><strong>${esc(channel.peer.name)}</strong></div><div class="row"><span>${this.text.identityNumber}</span><code>${esc(channel.peer.identity || "—")}</code></div>`, `<button class="button close">${this.text.close}</button>`);
     dialog.querySelector(".close").addEventListener("click", () => dialog.remove());
   }
 
@@ -360,9 +468,11 @@ class HomeAssistantChatPanel extends HTMLElement {
 
   async userSettingsDialog() {
     const blocked = await this.ws({type:"home_assistant_chat/user/blocked"});
-    const body = `<p>${this.text.userSettingsHint}</p>${this.blockedUsersMarkup(blocked)}`;
+    const body = `${this.identityMarkup()}${this.recoveryMarkup()}<p>${this.text.userSettingsHint}</p>${this.blockedUsersMarkup(blocked)}`;
     const dialog = this.dialog(this.text.settings, body, `<button class="button close">${this.text.close}</button>`);
     dialog.querySelector(".close").addEventListener("click", () => dialog.remove());
+    this.bindIdentityCopy(dialog);
+    this.bindRecoveryActions(dialog);
     this.bindUnblockActions(dialog, async () => { dialog.remove(); await this.refreshState(); await this.userSettingsDialog(); });
   }
 
@@ -392,8 +502,10 @@ class HomeAssistantChatPanel extends HTMLElement {
       } else {
         const settings = this._state.settings;
         const blocked = await this.ws({type:"home_assistant_chat/user/blocked"});
-        content.innerHTML = `<label class="row">${this.text.enabled}<input id="setting-enabled" type="checkbox" ${settings.enabled ? "checked" : ""}></label><label class="row">${this.text.allowUsers}<input id="setting-users" type="checkbox" ${settings.allow_users ? "checked" : ""}></label>
+        content.innerHTML = `${this.identityMarkup()}${this.recoveryMarkup()}<label class="row">${this.text.enabled}<input id="setting-enabled" type="checkbox" ${settings.enabled ? "checked" : ""}></label><label class="row">${this.text.allowUsers}<input id="setting-users" type="checkbox" ${settings.allow_users ? "checked" : ""}></label>
           <label class="row">${this.text.retention}<input id="setting-retention" type="number" min="0" max="3650" value="${Number(settings.retention_days || 0)}"></label><label class="row">${this.text.showSecurity}<input id="setting-security" type="checkbox" ${settings.show_security_details ? "checked" : ""}></label><label class="row">${this.text.showDeletedMessages}<input id="setting-deleted-markers" type="checkbox" ${settings.show_deleted_messages ? "checked" : ""}></label><button class="button save-settings">${this.text.save}</button>${this.blockedUsersMarkup(blocked)}`;
+        this.bindIdentityCopy(content);
+        this.bindRecoveryActions(content);
         content.querySelector(".save-settings").addEventListener("click", async () => { await this.ws({type:"home_assistant_chat/settings", enabled:content.querySelector("#setting-enabled").checked, allow_users:content.querySelector("#setting-users").checked, retention_days:Number(content.querySelector("#setting-retention").value), show_security_details:content.querySelector("#setting-security").checked, show_deleted_messages:content.querySelector("#setting-deleted-markers").checked}); await reload(); await show("settings"); });
         this.bindUnblockActions(content, async () => { await reload(); await show("settings"); });
       }

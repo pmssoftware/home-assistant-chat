@@ -13,7 +13,7 @@ Home Assistant Chat is a local custom integration with a native sidebar panel.
 It runs inside Home Assistant and does not require a separate add-on or chat
 server for local use.
 
-Current experimental version: **0.1.17**
+Current experimental version: **0.2.0**
 
 ## Installation
 
@@ -40,6 +40,8 @@ Choose **Integration** as its category.
 - Message and entire private-chat deletion
 - English and German interface
 - Experimental browser-side message encryption
+- Stable eight-digit local contact identities
+- Client-encrypted recovery codes for restoring channel keys on a new device
 - Administrator controls for access, channels, moderation and devices
 
 Encryption remains experimental. Browser Web Crypto and IndexedDB hold device
@@ -49,8 +51,8 @@ post-compromise security or standards-compliant MLS.
 
 ## Roadmap
 
-1. Stabilize local messaging, identity, encryption and device handling.
-2. Add numeric contact identities and QR-code contact exchange.
+1. Stabilize local messaging, encryption recovery and device handling.
+2. Add QR-code contact exchange and verified device linking.
 3. Add federation using addresses such as `number@server-address` over a
    dedicated chat port.
 4. Add reliable delivery, federation security and server administration.
@@ -80,3 +82,8 @@ pytest -q
 
 Contributions and testing feedback are welcome while the project is marked
 experimental.
+
+Compatibility is not guaranteed during experimental releases. After the first
+stable release, identities and addresses will remain permanent, persisted data
+will use tested additive migrations, and protocol changes will be versioned with
+explicit deprecation periods.

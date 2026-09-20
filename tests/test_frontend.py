@@ -131,6 +131,64 @@ def test_frontend_languages_are_extensible_and_fall_back_to_english():
     assert 'return STRINGS[language] ? language : "en"' in source
     assert '.split(/[-_]/)[0].toLowerCase()' in source
 
+def test_identity_ui_uses_numeric_local_and_federated_addresses():
+    source = JS.read_text()
+    assert 'IDENTITY_RE' in source
+    assert 'NUMBER@HOST[:PORT]' in source
+    assert '48392017@example.org:8123' in source
+    assert 'validIdentity(handle)' in source
+    assert 'identityNumber:"Identity number"' in source
+    assert 'identityNumber:"Identitätsnummer"' in source
+    assert 'federatedNotSupported' in source
+    assert 'home_assistant_chat/private", handle' in source
+
+def test_identity_is_visible_copyable_and_peer_uuid_is_not_contact_identifier():
+    source = JS.read_text()
+    assert 'identityMarkup()' in source
+    assert 'copy-identity' in source and 'navigator.clipboard.writeText' in source
+    assert 'this.identityMarkup()' in source
+    assert 'channel.peer.identity || "—"' in source
+    assert 'channel.peer.id}</code>' not in source
+
+def test_recovery_bundle_is_client_side_pbkdf2_aes_gcm_and_idb_backed():
+    source = JS.read_text()
+    assert 'dbEntriesWithPrefix(prefix)' in source
+    assert 'new Uint8Array(32)' in source and 'base64Url' in source
+    assert 'PBKDF2' in source and 'SHA-256' in source
+    assert 'iterations = 210000' in source
+    assert 'crypto.subtle.encrypt({name:"AES-GCM", iv:nonce}' in source
+    assert 'home_assistant_chat/recovery/set' in source
+    assert 'home_assistant_chat/recovery/get' in source
+    assert 'await dbPut("recovery-code", code)' in source
+    assert 'this._recoveryUpdating' in source
+    assert 'crypto.subtle.exportKey("raw", key)' in source
+    assert 'crypto.subtle.importKey("raw", keyBytes' in source
+
+def test_recovery_controls_warn_about_new_devices_and_are_localized():
+    source = JS.read_text()
+    assert 'recoveryWarning:' in source
+    assert 'Ein neues Gerät benötigt ihn' in source
+    assert 'recoveryMarkup()' in source
+    assert 'create-recovery' in source and 'restore-recovery' in source
+    assert 'navigator.clipboard.writeText(code)' in source
+
+def test_recovery_updates_are_fingerprinted_and_imports_are_deduplicated():
+    source = JS.read_text()
+    assert 'entries.sort((a, b) => a.key_id.localeCompare(b.key_id))' in source
+    assert 'crypto.subtle.digest("SHA-256", fingerprintInput)' in source
+    assert 'this._recoveryFingerprint === fingerprint' in source
+    assert 'const imported = await this.claimOffers()' in source
+    assert 'if (await channelKey(channel.id, epoch)) continue' in source
+    assert 'return imported' in source
+    assert 'iterations > 1000000' in source
+
+def test_recovery_restore_validates_code_bundle_and_aes_key_sizes():
+    source = JS.read_text()
+    assert '^[A-Za-z0-9_-]{43}$' in source
+    assert 'salt.length < 16' in source and 'nonce.length !== 12' in source
+    assert 'item.key_id.length > 200' in source
+    assert 'keyBytes.length !== 32' in source
+
 
 def test_deleted_message_markers_are_localized_and_admin_configurable():
     source = JS.read_text()
