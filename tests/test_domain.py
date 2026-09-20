@@ -70,3 +70,16 @@ def test_restricted_announcements_and_same_user_devices_follow_visibility():
     assert channel["id"] in {item["id"] for item in d.channels_for("u",set(),True,None)}
     assert {item["id"] for item in d.devices_for_channel("u",channel["id"])} == {"device-one","device-two"}
     assert channel["id"] not in {item["id"] for item in d.channels_for("other",set(),True,None)}
+
+def test_private_chat_silence_is_personal_and_removed_with_chat():
+    d=ChatDomain.fresh()
+    result=d.resolve_private("a","Bob",[{"id":"b","name":"Bob","enabled":True}],{"b"},False)
+    channel_id=result["channel"]["id"]
+    d.set_private_silenced("a",channel_id,True)
+    assert d.data["silenced"]["a"] == [channel_id]
+    assert not d.data["silenced"].get("b")
+    try:d.set_private_silenced("other",channel_id,True)
+    except PermissionError as err:assert str(err)=="channel_access"
+    else:assert False
+    d.delete_private("a",channel_id,True)
+    assert d.data["silenced"]["a"] == []

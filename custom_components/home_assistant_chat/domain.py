@@ -44,7 +44,7 @@ class ChatDomain:
         return cls({"schema_version": 2, "server_id": sid, "channels": {
             "public": {"id":"public","kind":"public","name":"Public chat","restricted":False,"members":[],"key_epoch":1},
             "announcements": {"id":"announcements","kind":"announcement","name":"Announcements","restricted":False,"members":[],"key_epoch":1},
-        }, "messages": {}, "blocks": {}, "mutes": {}, "devices": {}, "keys": {}, "key_requests": {}, "seen": {}, "replay": {}, "users": {"allowed": None}})
+        }, "messages": {}, "blocks": {}, "mutes": {}, "silenced": {}, "devices": {}, "keys": {}, "key_requests": {}, "seen": {}, "replay": {}, "users": {"allowed": None}})
 
     def migrate(self) -> bool:
         changed = False; version = self.data.get("schema_version", 0); defaults = self.fresh(self.data.get("server_id")).data
@@ -139,6 +139,13 @@ class ChatDomain:
         if cid in self.data["channels"]: self.data["channels"][cid]["key_epoch"] = self.data["channels"][cid].get("key_epoch",1)+1
     def remove_block(self, actor: str, target: str) -> None: self.data["blocks"][actor]=sorted(set(self.data["blocks"].get(actor, []))-{target})
     def private_blocked(self, a: str, b: str) -> bool: return b in self.data["blocks"].get(a, []) or a in self.data["blocks"].get(b, [])
+    def set_private_silenced(self, actor: str, channel_id: str, silenced: bool) -> None:
+        channel=self.data["channels"].get(channel_id)
+        if not channel or channel.get("kind") != "private" or actor not in channel.get("members",[]): raise PermissionError("channel_access")
+        channels=set(self.data["silenced"].get(actor,[]))
+        if silenced: channels.add(channel_id)
+        else: channels.discard(channel_id)
+        self.data["silenced"][actor]=sorted(channels)
 
     def add_message(self, actor: str, channel_id: str, ciphertext: str, envelope: dict[str, Any], admins: set[str], now: float | None = None) -> dict[str, Any]:
         if not self.can_post(channel_id, actor, admins): raise PermissionError("channel_access")
@@ -162,6 +169,8 @@ class ChatDomain:
         if not confirm: raise PermissionError("confirm_delete")
         self.data["channels"].pop(channel_id)
         for mid in [mid for mid,msg in self.data["messages"].items() if msg["channel_id"] == channel_id]: self.data["messages"].pop(mid)
+        for user_id, channels in self.data["silenced"].items():
+            self.data["silenced"][user_id]=sorted(set(channels)-{channel_id})
     def set_mute(self, actor: str, target: str, muted: bool, admins: set[str]) -> None:
         if actor not in admins: raise PermissionError("admin_required")
         self.data["mutes"][target]=muted

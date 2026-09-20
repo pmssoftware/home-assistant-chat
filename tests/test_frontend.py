@@ -55,6 +55,15 @@ def test_role_specific_settings_windows():
     assert 'home_assistant_chat/user/unblock' in source
     assert 'this.shadowRoot.querySelector("#user-settings")' in source
 
+def test_private_chat_overflow_menu_contains_contact_actions():
+    source = JS.read_text()
+    assert 'icon="mdi:dots-vertical"' in source
+    assert 'id="private-info"' in source
+    assert 'id="silence-private"' in source
+    assert 'id="block-private"' in source
+    assert 'id="delete-private"' in source
+    assert 'home_assistant_chat/private/silence' in source
+
 def test_deleted_message_markers_are_localized_and_admin_configurable():
     source = JS.read_text()
     assert 'messageDeleted:"Message deleted"' in source

@@ -23,7 +23,7 @@ async def _members(hass, raw: list[str]) -> set[str]:
 def async_register_websocket(hass: HomeAssistant, store) -> None:
     if hass.data.setdefault(f"{DOMAIN}_ws_registered", False): return
     hass.data[f"{DOMAIN}_ws_registered"] = True
-    for handler in (_state,_subscribe,_send,_private,_channel_create,_channel_edit,_channel_delete,_channel_members,_message_delete,_private_delete,_block,_blocked_users,_unblock,_mute,_seen,_users,_user_access,_device_register,_device_list,_device_revoke,_key_offer,_key_state,_key_devices,_key_request,_settings): websocket_api.async_register_command(hass, handler)
+    for handler in (_state,_subscribe,_send,_private,_channel_create,_channel_edit,_channel_delete,_channel_members,_message_delete,_private_delete,_private_silence,_block,_blocked_users,_unblock,_mute,_seen,_users,_user_access,_device_register,_device_list,_device_revoke,_key_offer,_key_state,_key_devices,_key_request,_settings): websocket_api.async_register_command(hass, handler)
 
 @websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/state"})
 @websocket_api.async_response
@@ -38,6 +38,7 @@ async def _state(hass, connection, msg):
         if source.get("kind")=="private":
             peer_id=next((member for member in source.get("members",[]) if member!=uid),None)
             channel["peer"]={"id":peer_id,"name":names.get(peer_id,"User")} if peer_id else None
+            channel["silenced"]=channel["id"] in store.data["silenced"].get(uid,[])
     visible={c["id"] for c in channels}; messages=[{**m,"sender_name":names.get(m["sender_id"],"User")} for m in store.data["messages"].values() if m["channel_id"] in visible and (not m["deleted"] or settings["show_deleted_messages"])]
     devices=[]
     source=store.data["devices"].items() if admins else [(uid,store.data["devices"].get(uid,{}))]
@@ -141,6 +142,14 @@ async def _private_delete(hass, connection, msg):
     try: store.domain.delete_private(_uid(connection),msg["channel_id"],msg["confirm"]); await store.changed("private_deleted",channel_id=msg["channel_id"],user_ids=recipients)
     except (PermissionError,KeyError) as err: _error(connection,msg["id"],str(err))
     else: _result(connection,msg["id"])
+
+@websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/private/silence", vol.Required("channel_id"): str, vol.Required("silenced"): bool})
+@websocket_api.async_response
+async def _private_silence(hass, connection, msg):
+    store=_store(hass)
+    try: store.domain.set_private_silenced(_uid(connection),msg["channel_id"],msg["silenced"]); await store.changed("private_silenced",channel_id=msg["channel_id"],user_ids=[_uid(connection)])
+    except PermissionError as err: _error(connection,msg["id"],str(err))
+    else: _result(connection,msg["id"],{"silenced":msg["silenced"]})
 
 @websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/user/block", vol.Required("user_id"): str})
 @websocket_api.async_response
