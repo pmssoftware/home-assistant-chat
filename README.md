@@ -21,6 +21,18 @@ For manual installation, copy `custom_components/home_assistant_chat` into the H
 
 Encryption is experimental: browser Web Crypto/IndexedDB holds device private keys, while the server stores ciphertext and routing metadata. This is not MLS, does not provide verified identity, and currently does not protect a compromised browser, Home Assistant host, or malicious enrolled device. See [docs/architecture.md](docs/architecture.md).
 
+## Roadmap
+
+- Add an optional [MeshCore](https://meshcore.io/) fallback transport for basic
+  text messaging when the normal internet or VPN connection to Home Assistant
+  is unavailable.
+- Bridge through compatible MeshCore companion hardware using the documented
+  companion protocol, with queued delivery and automatic return to the normal
+  Home Assistant WebSocket transport when connectivity recovers.
+- Keep fallback status visible and require explicit setup; MeshCore hardware is
+  required at the participating endpoints, and the fallback must not silently
+  weaken chat identity, authorization, or encryption guarantees.
+
 ## Development
 
 ```text
