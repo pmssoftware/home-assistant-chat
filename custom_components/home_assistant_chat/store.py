@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN, RATE_LIMIT_PER_MINUTE, STORAGE_KEY, STORAGE_VERSION
-from .domain import ChatDomain
+from .domain import ChatDomain, normalize_federation_endpoint
 
 class ChatStore:
     """Persistent adapter around the transport-independent ChatDomain."""
@@ -57,7 +57,21 @@ class ChatStore:
         await self._store.async_save(self.data)
 
     def settings(self) -> dict[str, Any]:
-        return {key:self.entry.options.get(key, self.entry.data.get(key, default)) for key,default in {"enabled":True,"allow_users":True,"retention_days":0,"encryption_enabled":True,"show_security_details":False,"show_deleted_messages":True}.items()}
+        return {key:self.entry.options.get(key, self.entry.data.get(key, default)) for key,default in {"enabled":True,"allow_users":True,"retention_days":0,"encryption_enabled":True,"show_security_details":False,"show_deleted_messages":True,"federation_qr_enabled":False,"federation_address":"","federation_port":0}.items()}
+
+    def identity_address(self, user_id: str) -> str:
+        """Return a QR-safe local identity, optionally with the configured suffix."""
+        number = str(self.domain.ensure_identity(user_id))
+        settings = self.settings()
+        if not settings["federation_qr_enabled"]:
+            return number
+        try:
+            address, port = normalize_federation_endpoint(settings["federation_address"], settings["federation_port"])
+        except ValueError:
+            # Invalid legacy options must never make state loading fail or emit
+            # an unsafe address. The settings command rejects new invalid data.
+            return number
+        return f"{number}@{address}:{port}"
     def can_use(self, user_id: str) -> bool:
         allowed=self.data.get("users",{}).get("allowed")
         return self.settings()["enabled"] and self.settings()["allow_users"] and (allowed is None or user_id in allowed)

@@ -10,6 +10,7 @@ for name in ("const","domain"):
     spec=importlib.util.spec_from_file_location(f"custom_components.home_assistant_chat.{name}",ROOT/f"custom_components/home_assistant_chat/{name}.py")
     mod=importlib.util.module_from_spec(spec);sys.modules[spec.name]=mod;spec.loader.exec_module(mod)
 ChatDomain=sys.modules["custom_components.home_assistant_chat.domain"].ChatDomain
+normalize_federation_endpoint=sys.modules["custom_components.home_assistant_chat.domain"].normalize_federation_endpoint
 
 def env(device="d",counter=1,key="public:1"):
     return {"version":"ha-chat/1","device_id":device,"counter":counter,"nonce":"AAAAAAAAAAAAAAAA","key_id":key,"aad":"cHVibGlj"}
@@ -54,6 +55,14 @@ def test_numeric_identities_are_stable_unique_and_parse_federated_syntax():
     try:d.parse_identity(f"{first}@remote.example:8123")
     except ValueError as err: assert str(err) == "federated_identity_not_supported"
     else: assert False
+
+def test_federation_qr_endpoint_is_strictly_normalized():
+    assert normalize_federation_endpoint("Example.org", 8123) == ("example.org", 8123)
+    assert normalize_federation_endpoint("192.168.69.250", 8123) == ("192.168.69.250", 8123)
+    for address, port in (("https://example.org", 443), ("example.org/path", 443), ("example.org", 0), ("example.org", 65536), ("example.org", True), ("2001:db8::1", 443), ("[2001:db8::1]", 443)):
+        try: normalize_federation_endpoint(address, port)
+        except ValueError: pass
+        else: assert False
 
 def test_private_chat_resolves_numeric_identity_and_preserves_name_lookup():
     d=ChatDomain.fresh(); d.ensure_identity("alice"); number=d.ensure_identity("bob")

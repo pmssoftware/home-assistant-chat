@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 import json
 import re
 import secrets
@@ -14,7 +15,35 @@ from .const import MAX_MESSAGE_LENGTH, PROTOCOL_VERSION
 
 HANDLE_RE = re.compile(r"^.{1,128}$", re.DOTALL)
 IDENTITY_RE = re.compile(r"^([1-9]\d{7})(?:@([^:]+)(?::(\d+))?)?$")
+FEDERATION_HOST_RE = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$", re.IGNORECASE)
 MAX_RECOVERY_FIELD = 16384
+
+def normalize_federation_endpoint(address: Any, port: Any) -> tuple[str, int]:
+    """Validate the host/port advertised in an identity QR code.
+
+    This is deliberately an endpoint validator only; it performs no DNS lookup
+    and does not authorize or initiate federation connections.
+    """
+    if not isinstance(address, str):
+        raise ValueError("invalid_federation_address")
+    host = address.strip()
+    if not host or len(host) > 253 or any(ch.isspace() for ch in host):
+        raise ValueError("invalid_federation_address")
+    if ":" in host or host.startswith("[") or host.endswith("]"):
+        raise ValueError("invalid_federation_address")
+    try:
+        parsed = ipaddress.ip_address(host)
+    except ValueError:
+        if not FEDERATION_HOST_RE.fullmatch(host) or len(host.rstrip(".").split(".")) > 127:
+            raise ValueError("invalid_federation_address")
+        canonical_host = host.rstrip(".").lower()
+    else:
+        if parsed.version != 4:
+            raise ValueError("invalid_federation_address")
+        canonical_host = parsed.compressed
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ValueError("invalid_federation_port")
+    return canonical_host, port
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{secrets.token_urlsafe(18)}"

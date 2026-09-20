@@ -231,6 +231,17 @@ def test_identity_qr_ui_has_manual_confirmation_and_camera_lifecycle():
     assert 'this.text.qrPermission' in source and 'this.text.qrInvalid' in source
     assert 'QR_DEPENDENCY.md' not in source  # dependency note stays out of runtime UI
 
+def test_identity_qr_federation_toggle_uses_configured_address_and_port():
+    source = JS.read_text()
+    assert 'this._state?.identity_address || identity' in source
+    assert 'channel.peer.identity_address || identity' in source
+    assert 'federation_qr_enabled' in source
+    assert 'federation_address' in source and 'federation_port' in source
+    assert 'federationQr:"Include federation address in identity QR codes"' in source
+    assert 'federationQr:"Föderationsadresse in Identitäts-QR-Codes einschließen"' in source
+    assert 'id="setting-federation-qr"' in source
+    assert 'home_assistant_chat/settings' in source
+
 def test_qr_dependencies_are_bundled_locally_with_licenses():
     frontend = ROOT / "custom_components/home_assistant_chat/frontend"
     adapter = (frontend / "qr-adapter.js").read_text()

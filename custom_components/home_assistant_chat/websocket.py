@@ -6,6 +6,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
 from .const import DOMAIN, PROTOCOL_VERSION
+from .domain import normalize_federation_endpoint
 
 def _store(hass: HomeAssistant): return next(iter(hass.data[DOMAIN].values()))
 def _uid(connection) -> str: return connection.user.id
@@ -41,14 +42,14 @@ async def _state(hass, connection, msg):
         source=store.data["channels"].get(channel["id"],{})
         if source.get("kind")=="private":
             peer_id=next((member for member in source.get("members",[]) if member!=uid),None)
-            channel["peer"]={"id":peer_id,"name":names.get(peer_id,"User"),"identity":str(store.domain.ensure_identity(peer_id))} if peer_id else None
+            channel["peer"]={"id":peer_id,"name":names.get(peer_id,"User"),"identity":str(store.domain.ensure_identity(peer_id)),"identity_address":store.identity_address(peer_id)} if peer_id else None
             channel["silenced"]=channel["id"] in store.data["silenced"].get(uid,[])
     visible={c["id"] for c in channels}; messages=[{**m,"sender_name":names.get(m["sender_id"],"User")} for m in store.data["messages"].values() if m["channel_id"] in visible and (not m["deleted"] or settings["show_deleted_messages"])]
     devices=[]
     source=store.data["devices"].items() if admins else [(uid,store.data["devices"].get(uid,{}))]
     for owner, owned in source:
         for device in owned.values(): devices.append({k:v for k,v in device.items() if admins or k != "public_key"})
-    _result(connection,msg["id"],{"protocol_version":PROTOCOL_VERSION,"server_id":store.data["server_id"],"user_id":uid,"identity":str(own_identity),"channels":channels,"messages":messages,"devices":devices,"seen":store.data["seen"].get(uid,{}),"is_admin":bool(admins),"is_muted":bool(store.data["mutes"].get(uid)),"settings":{"enabled":settings["enabled"],"allow_users":settings["allow_users"],"retention_days":settings["retention_days"],"encryption_enabled":settings["encryption_enabled"],"show_security_details":settings["show_security_details"],"show_deleted_messages":settings["show_deleted_messages"]}})
+    _result(connection,msg["id"],{"protocol_version":PROTOCOL_VERSION,"server_id":store.data["server_id"],"user_id":uid,"identity":str(own_identity),"identity_address":store.identity_address(uid),"channels":channels,"messages":messages,"devices":devices,"seen":store.data["seen"].get(uid,{}),"is_admin":bool(admins),"is_muted":bool(store.data["mutes"].get(uid)),"settings":{"enabled":settings["enabled"],"allow_users":settings["allow_users"],"retention_days":settings["retention_days"],"encryption_enabled":settings["encryption_enabled"],"show_security_details":settings["show_security_details"],"show_deleted_messages":settings["show_deleted_messages"],"federation_qr_enabled":settings["federation_qr_enabled"],"federation_address":settings["federation_address"],"federation_port":settings["federation_port"]}})
 
 @websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/subscribe", vol.Optional("channel_id"): str})
 @websocket_api.async_response
@@ -88,7 +89,10 @@ async def _private(hass, connection, msg):
     for user in users:
         before=user["id"] in store.domain.data["identities"]; user["identity"]=str(store.domain.ensure_identity(user["id"])); changed |= not before
     if changed: await store.async_save()
-    try: result=store.domain.resolve_private(_uid(connection),msg["handle"],users,{u["id"] for u in users if u["enabled"]},msg["confirm_unblock"]); await store.changed("private",channel=result["channel"])
+    try:
+        result=store.domain.resolve_private(_uid(connection),msg["handle"],users,{u["id"] for u in users if u["enabled"]},msg["confirm_unblock"])
+        result["user"]["identity_address"] = store.identity_address(result["user"]["id"])
+        await store.changed("private",channel=result["channel"])
     except (PermissionError,ValueError) as err: _error(connection,msg["id"],str(err))
     else: _result(connection,msg["id"],result)
 
@@ -306,11 +310,18 @@ async def _recovery_set(hass, connection, msg):
     except (PermissionError,ValueError) as err: _error(connection,msg["id"],str(err))
     else: _result(connection,msg["id"],result)
 
-@websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/settings", vol.Optional("enabled"): bool, vol.Optional("allow_users"): bool, vol.Optional("allowed_users"): [str], vol.Optional("retention_days"): int, vol.Optional("encryption_enabled"): bool, vol.Optional("show_security_details"): bool, vol.Optional("show_deleted_messages"): bool})
+@websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/settings", vol.Optional("enabled"): bool, vol.Optional("allow_users"): bool, vol.Optional("allowed_users"): [str], vol.Optional("retention_days"): int, vol.Optional("encryption_enabled"): bool, vol.Optional("show_security_details"): bool, vol.Optional("show_deleted_messages"): bool, vol.Optional("federation_qr_enabled"): bool, vol.Optional("federation_address"): str, vol.Optional("federation_port"): int})
 @websocket_api.require_admin
 @websocket_api.async_response
 async def _settings(hass, connection, msg):
-    store=_store(hass); updates={k:v for k,v in msg.items() if k in {"enabled","allow_users","retention_days","encryption_enabled","show_security_details","show_deleted_messages"}}
+    store=_store(hass); updates={k:v for k,v in msg.items() if k in {"enabled","allow_users","retention_days","encryption_enabled","show_security_details","show_deleted_messages","federation_qr_enabled","federation_address","federation_port"}}
+    proposed={**store.settings(), **updates}
+    if proposed.get("federation_qr_enabled"):
+        try:
+            address, port = normalize_federation_endpoint(proposed.get("federation_address"), proposed.get("federation_port"))
+        except ValueError as err:
+            _error(connection,msg["id"],str(err)); return
+        updates["federation_address"], updates["federation_port"] = address, port
     if "allowed_users" in msg: store.data["users"]["allowed"] = msg["allowed_users"] or None
     if msg.get("show_deleted_messages") is False:
         for message_id in [message_id for message_id,message in store.data["messages"].items() if message.get("deleted")]: store.data["messages"].pop(message_id)
