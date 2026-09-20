@@ -23,7 +23,7 @@ const STRINGS = {
     defaultChannel:"Default channel", cannotPost:"You cannot post in this channel.", noUsers:"No users found", noDevices:"No encrypted devices found", noChannels:"No channels found",
     messageDeleted:"Message deleted", showDeletedMessages:"Show a marker for deleted messages", userSettingsHint:"Manage the people you have blocked.",
     contactInfo:"Contact info", silence:"Silence", unsilence:"Unmute", userIdentifier:"Home Assistant user ID", moreOptions:"More options", announcements:"Announcements",
-    resetKey:"Start with a new key", confirmResetKey:"Create a new encryption key for this chat? Older messages whose keys cannot be recovered will remain unreadable, but new messages will work."
+    resetKey:"Start with a new key", confirmResetKey:"Create a new encryption key for this chat? Older messages whose keys cannot be recovered will remain unreadable, but new messages will work.", resetError:"Could not create a new encryption key. Please try again."
   },
   de: {
     chat:"Chat", private:"Privater Chat", device:"Browser-Gerät", handle:"Exakter aktivierter Home-Assistant-Benutzername", send:"Senden",
@@ -43,7 +43,7 @@ const STRINGS = {
     noUsers:"Keine Benutzer gefunden", noDevices:"Keine verschlüsselten Geräte gefunden", noChannels:"Keine Kanäle gefunden",
     messageDeleted:"Nachricht gelöscht", showDeletedMessages:"Markierung für gelöschte Nachrichten anzeigen", userSettingsHint:"Verwalte die von dir blockierten Benutzer.",
     contactInfo:"Kontaktinformationen", silence:"Stummschalten", unsilence:"Stummschaltung aufheben", userIdentifier:"Home-Assistant-Benutzer-ID", moreOptions:"Weitere Optionen", announcements:"Ankündigungen",
-    resetKey:"Mit neuem Schlüssel fortfahren", confirmResetKey:"Einen neuen Verschlüsselungsschlüssel für diesen Chat erstellen? Ältere Nachrichten ohne wiederherstellbaren Schlüssel bleiben unlesbar, aber neue Nachrichten funktionieren wieder."
+    resetKey:"Mit neuem Schlüssel fortfahren", confirmResetKey:"Einen neuen Verschlüsselungsschlüssel für diesen Chat erstellen? Ältere Nachrichten ohne wiederherstellbaren Schlüssel bleiben unlesbar, aber neue Nachrichten funktionieren wieder.", resetError:"Der neue Verschlüsselungsschlüssel konnte nicht erstellt werden. Bitte versuche es erneut."
   }
 };
 
@@ -175,7 +175,7 @@ class HomeAssistantChatPanel extends HTMLElement {
   ws(message) { return this._hass.callWS(message); }
 
   async initialize() {
-    this._ready = true; this._channels = []; this._messages = []; this._active = "public"; this.render();
+    this._ready = true; this._channels = []; this._messages = []; this._active = "public"; this._keyRequests = new Set(); this.render();
     try {
       const identity = await deviceIdentity();
       await this.ws({type:"home_assistant_chat/device/register", device_id:identity.id, public_key:JSON.stringify(identity.publicKey), label:this.text.device});
@@ -208,7 +208,7 @@ class HomeAssistantChatPanel extends HTMLElement {
     for (const channel of this._channels) {
       try {
         const state = await this.ws({type:"home_assistant_chat/key/state", channel_id:channel.id});
-        for (const group of Object.values(state.offers || {})) for (const offer of Object.values(group)) if (offer.device_id === identity.id) await unwrapChannelKey(channel.id, offer);
+        for (const group of Object.values(state.offers || {})) for (const offer of Object.values(group)) if (offer.device_id === identity.id) { await unwrapChannelKey(channel.id, offer); this._keyRequests.delete(`${channel.id}:${offer.key_id.split(":").pop()}`); }
       } catch { /* inaccessible channels are omitted */ }
     }
   }
@@ -219,7 +219,8 @@ class HomeAssistantChatPanel extends HTMLElement {
       await this.claimOffers(); this._keyState = await this.ws({type:"home_assistant_chat/key/state", channel_id:channelId});
       const key = await channelKey(channelId, channel.key_epoch || 1); this._securityCode = await keySecurityCode(key); const hasMessages = this._messages.some((message) => message.channel_id === channelId);
       this._waiting = !key && hasMessages;
-      if (this._waiting) { const identity = await deviceIdentity(); await this.ws({type:"home_assistant_chat/key/request", channel_id:channelId, device_id:identity.id}); }
+      const requestKey = `${channelId}:${channel.key_epoch || 1}`;
+      if (this._waiting && !this._keyRequests.has(requestKey)) { this._keyRequests.add(requestKey); try { const identity = await deviceIdentity(); await this.ws({type:"home_assistant_chat/key/request", channel_id:channelId, device_id:identity.id}); } catch (error) { this._keyRequests.delete(requestKey); throw error; } }
     } catch { this._waiting = true; }
     this.render();
   }
@@ -248,8 +249,8 @@ class HomeAssistantChatPanel extends HTMLElement {
         const identity=await deviceIdentity();
         const result=await this.ws({type:"home_assistant_chat/key/reset",channel_id:channel.id,device_id:identity.id,expected_epoch:channel.key_epoch || 1});
         const key=await channelKey(channel.id,result.key_epoch,true);
-        await this.refreshState(); await this.shareKey(channel.id,result.key_epoch); this._securityCode=await keySecurityCode(key); this._waiting=false; this.render();
-      } catch { await this.refreshState(); await this.updateKeyState(channel.id); }
+        this._keyRequests.delete(`${channel.id}:${channel.key_epoch || 1}`); await this.refreshState(); await this.shareKey(channel.id,result.key_epoch); this._securityCode=await keySecurityCode(key); this._waiting=false; this.render();
+      } catch { this._error = this.text.resetError; this.render(); }
     });
   }
 

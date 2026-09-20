@@ -48,6 +48,15 @@ def test_admin_bindings_and_csp_safe_markup():
     assert 'promptForEdit' not in source
     assert not re.search(r'<[^>]+\s+on(?:click|error)\s*=', source)
 
+def test_key_recovery_requests_are_deduplicated_and_reset_errors_are_localized():
+    source = JS.read_text()
+    assert 'this._keyRequests = new Set()' in source
+    assert '!this._keyRequests.has(requestKey)' in source
+    assert 'this._keyRequests.add(requestKey)' in source
+    assert 'this._keyRequests.delete(requestKey)' in source
+    assert 'resetError:' in source
+    assert 'this._error = this.text.resetError' in source
+
 def test_registered_panel_name_matches_custom_element():
     panel_source = (ROOT / "custom_components/home_assistant_chat/panel.py").read_text()
     match = re.search(r'PANEL_NAME\s*=\s*"([^"]+)"', panel_source)
