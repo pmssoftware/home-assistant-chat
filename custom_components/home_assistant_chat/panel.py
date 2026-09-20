@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN, PANEL_TITLE, PANEL_URL
 
-PANEL_NAME = f"{DOMAIN}-panel"
+PANEL_NAME = "ha-home-assistant-chat-panel"
 STATIC_PATH = f"/api/{DOMAIN}/static"
 
 async def async_register_panel(hass: HomeAssistant, entry_id: str) -> None:

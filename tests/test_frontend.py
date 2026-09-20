@@ -26,3 +26,9 @@ def test_admin_bindings_and_csp_safe_markup():
     assert 'revoke-device' in source and 'block-private' in source and 'delete-private' in source
     assert 'promptForEdit' not in source
     assert not re.search(r'<[^>]+\s+on(?:click|error)\s*=', source)
+
+def test_registered_panel_name_matches_custom_element():
+    panel_source = (ROOT / "custom_components/home_assistant_chat/panel.py").read_text()
+    match = re.search(r'PANEL_NAME\s*=\s*"([^"]+)"', panel_source)
+    assert match
+    assert f'customElements.define("{match.group(1)}"' in JS.read_text()
