@@ -10,9 +10,6 @@ This is an experimental v1 implementation. It includes config flow, persistent l
 
 Current integration version: **0.1.6**
 
-Publishing a new GitHub release automatically removes every older release and
-its release tag after the new release has been published successfully.
-
 ## Installation with HACS
 
 1. Select the **Add repository to HACS** button above.
