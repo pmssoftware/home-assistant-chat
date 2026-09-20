@@ -102,7 +102,8 @@ def test_private_chats_use_the_contact_name_instead_of_generic_label():
 def test_compact_icon_controls():
     source = JS.read_text()
     assert 'id="new-private" aria-label="${esc(text.private)}" title="${esc(text.private)}">+</button>' in source
-    assert '.delete-message{display:grid;place-items:center;flex:0 0 28px;width:28px;height:28px;padding:0;border:0;background:transparent}' in source
+    assert '.button.delete-message{display:grid;place-items:center;flex:0 0 28px;width:28px;height:28px;padding:0;border:0;background:transparent}' in source
+    assert '.button.delete-message:hover{' in source
     assert '.delete-message ha-icon{--mdc-icon-size:18px}' in source
 
 def test_default_channel_names_follow_personal_browser_language():
