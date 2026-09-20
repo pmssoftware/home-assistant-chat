@@ -72,7 +72,7 @@ def test_panel_url_is_cache_busted_by_manifest_version():
 def test_chat_actions_and_composer_use_the_requested_layout():
     source = JS.read_text()
     assert '<div class="side-top"><h2>${text.chat}</h2><button class="button" id="new-private"' in source
-    assert '<div class="header-actions">${this._state?.is_admin' in source
+    assert '<div class="header-actions">${(this._state?.is_admin ?? this._hass?.user?.is_admin)' in source
     assert 'height:var(--chat-header-height)' in source
     assert '<div class="message-head"><small>' in source
     assert '<ha-icon icon="mdi:delete-outline"' in source
@@ -197,10 +197,22 @@ def test_frontend_initialization_retries_without_duplicate_work():
     assert 'scheduleInitializationRetry()' in source
     assert 'const delays = [500, 1000, 2000, 5000, 10000, 30000]' in source
     assert 'if (this._retryTimer || this._disconnected || !this._hass) return' in source
-    assert 'if (typeof this._unsubscribe !== "function") this._unsubscribe =' in source
+    assert 'if (typeof this._unsubscribe !== "function") {' in source
+    assert 'this._unsubscribe = await this._hass.connection.subscribeMessage' in source
     assert 'clearTimeout(this._retryTimer)' in source
     assert 'this._disconnected = true' in source
     assert 'Optional recovery sync must never block the chat UI.' in source
+
+def test_core_state_initializes_before_encryption_and_admin_fallback_is_nonblocking():
+    source = JS.read_text()
+    assert 'await this.refreshState();\n      this._coreReady = true' in source
+    assert 'async startEncryption()' in source
+    assert source.index('await this.refreshState();\n      this._coreReady = true') < source.index('async startEncryption()')
+    assert 'this._encryptionError' in source
+    assert 'this._state?.is_admin ?? this._hass?.user?.is_admin' in source
+    assert 'sanitizeError(error)' in source
+    assert 'replace(/[^A-Za-z0-9_.:-]/g, "")' in source
+    assert 'this._encryptionRetryTimer' in source
 
 
 def test_deleted_message_markers_are_localized_and_admin_configurable():

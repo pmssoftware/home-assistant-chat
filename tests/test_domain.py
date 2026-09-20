@@ -25,6 +25,12 @@ def test_migration_repairs_identity_reverse_index():
     assert d.migrate(); assert d.data["identity_users"] == {"12345678":"alice"}
     assert d.ensure_identity("alice") == 12345678
 
+def test_malformed_or_deleted_private_data_does_not_break_visible_channels():
+    d=ChatDomain.fresh(); d.data["identities"]={"alice":"not-a-number","deleted":12345678}; d.data["identity_users"]={"12345678":"deleted"}
+    assert 10000000 <= d.ensure_identity("alice") <= 99999999
+    d.data["channels"]["stale"]={"id":"stale","kind":"private","members":["alice"]}
+    assert all(channel["id"] != "stale" for channel in d.channels_for("alice",set(),True,None))
+
 def test_recovery_bundle_is_opaque_isolated_validated_and_migrated():
     d=ChatDomain({"schema_version":3,"server_id":"s","recovery":{"alice":{"version":1,"ciphertext":"YQ==","salt":"Yg==","nonce":"Yw==","kdf":{},"updated":1}}})
     assert d.migrate() and d.get_recovery_bundle("alice")["ciphertext"] == "YQ=="

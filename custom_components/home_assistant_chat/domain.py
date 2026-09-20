@@ -90,8 +90,15 @@ class ChatDomain:
 
     def ensure_identity(self, user_id: str) -> int:
         if user_id in self.data["identities"]:
-            number=int(self.data["identities"][user_id]); self.data["identity_users"][str(number)]=user_id; return number
-        used={int(value) for value in self.data["identities"].values()}
+            try: number=int(self.data["identities"][user_id])
+            except (TypeError,ValueError): number=0
+            if IDENTITY_RE.fullmatch(str(number)) and self.data["identity_users"].get(str(number)) in (None,user_id):
+                self.data["identities"][user_id]=number; self.data["identity_users"][str(number)]=user_id; return number
+            self.data["identities"].pop(user_id,None)
+        used=set()
+        for value in self.data["identities"].values():
+            try: used.add(int(value))
+            except (TypeError,ValueError): pass
         number=secrets.randbelow(90000000)+10000000
         while number in used: number=secrets.randbelow(90000000)+10000000
         self.data["identities"][user_id]=number; self.data["identity_users"][str(number)]=user_id
@@ -110,7 +117,7 @@ class ChatDomain:
 
     def channels_for(self, user_id: str, admins: set[str], globally_enabled: bool, allowed_users: set[str] | None, include_members: bool = False) -> list[dict[str, Any]]:
         if not self.can_access(user_id, globally_enabled, allowed_users): return []
-        return [dict(ch) if include_members and user_id in admins else {k:v for k,v in ch.items() if k != "members"} for ch in self.data["channels"].values() if (ch["kind"] == "private" and user_id in ch["members"] and not self.private_blocked(*ch["members"])) or (ch["kind"] != "private" and (not ch["restricted"] or user_id in ch["members"] or user_id in admins))]
+        return [dict(ch) if include_members and user_id in admins else {k:v for k,v in ch.items() if k != "members"} for ch in self.data["channels"].values() if (ch.get("kind") == "private" and len(ch.get("members",[])) == 2 and user_id in ch.get("members",[]) and not self.private_blocked(*ch["members"])) or (ch.get("kind") != "private" and (not ch.get("restricted",False) or user_id in ch.get("members",[]) or user_id in admins))]
 
     def can_post(self, channel_id: str, user_id: str, admins: set[str]) -> bool:
         channel = self.data["channels"].get(channel_id)

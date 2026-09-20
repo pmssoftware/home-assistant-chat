@@ -201,17 +201,39 @@ class HomeAssistantChatPanel extends HTMLElement {
     if (this._initializing || this._disconnected || !this._hass) return;
     this._initializing = true; this._error = ""; this._channels ||= []; this._messages ||= []; this._active ||= "public"; this._keyRequests ||= new Set(); this.render();
     try {
+      // Core state is deliberately independent from browser crypto. A crypto
+      // failure must never hide channels, admin controls, or loaded messages.
+      await this.refreshState();
+      this._coreReady = true; this._ready = true; this._retryAttempt = 0; this._initializing = false; if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; }
+      if (this._disconnected) return;
+      if (typeof this._unsubscribe !== "function") {
+        try { this._unsubscribe = await this._hass.connection.subscribeMessage((event) => this.handleEvent(event), {type:"home_assistant_chat/subscribe"}); }
+        catch (error) { this._error = `${this.text.unavailable} (${this.sanitizeError(error)})`; this.render(); }
+      }
+      this.startEncryption();
+    } catch (error) {
+      this._coreReady = false; this._ready = false; this._initializing = false; this._error = `${this.text.unavailable} (${this.sanitizeError(error)})`; this.render();
+      this.scheduleInitializationRetry();
+    }
+  }
+
+  sanitizeError(error) {
+    const value = String(error?.code || error?.message || "unknown").replace(/[^A-Za-z0-9_.:-]/g, "").slice(0, 48);
+    return value || "unknown";
+  }
+
+  async startEncryption() {
+    if (this._encryptionInitializing || this._disconnected || !this._coreReady || !this._hass) return;
+    this._encryptionInitializing = true; this._encryptionError = ""; this.render();
+    try {
       const identity = await deviceIdentity();
       await this.ws({type:"home_assistant_chat/device/register", device_id:identity.id, public_key:JSON.stringify(identity.publicKey), label:this.text.device});
       await this.refreshState(); await this.claimOffers();
       try { if (await dbGet("recovery-code")) await this.updateRecoveryBundle(); } catch { /* Optional recovery sync must never block the chat UI. */ }
       await this.selectChannel(this._active);
-      if (this._disconnected) { this._initializing = false; return; }
-      if (typeof this._unsubscribe !== "function") this._unsubscribe = await this._hass.connection.subscribeMessage((event) => this.handleEvent(event), {type:"home_assistant_chat/subscribe"});
-      this._ready = true; this._retryAttempt = 0; this._initializing = false; if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; }
-    } catch {
-      this._ready = false; this._initializing = false; this._error = this.text.unavailable; this.render();
-      this.scheduleInitializationRetry();
+      this._encryptionInitializing = false; this._encryptionRetryAttempt = 0; if (this._encryptionRetryTimer) { clearTimeout(this._encryptionRetryTimer); this._encryptionRetryTimer = null; }
+    } catch (error) {
+      this._encryptionInitializing = false; this._encryptionError = `${this.text.unavailable} (${this.sanitizeError(error)})`; this.render(); this.scheduleEncryptionRetry();
     }
   }
 
@@ -221,7 +243,13 @@ class HomeAssistantChatPanel extends HTMLElement {
     this._retryTimer = setTimeout(() => { this._retryTimer = null; this.initialize(); }, delay);
   }
 
-  disconnectedCallback() { this._disconnected = true; if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; } if (typeof this._unsubscribe === "function") this._unsubscribe(); this._unsubscribe = null; this._ready = false; }
+  scheduleEncryptionRetry() {
+    if (this._encryptionRetryTimer || this._disconnected || !this._coreReady || !this._hass) return;
+    const delays = [1000, 2000, 5000, 10000, 30000]; const delay = delays[Math.min(this._encryptionRetryAttempt || 0, delays.length - 1)]; this._encryptionRetryAttempt = Math.min((this._encryptionRetryAttempt || 0) + 1, delays.length - 1);
+    this._encryptionRetryTimer = setTimeout(() => { this._encryptionRetryTimer = null; this.startEncryption(); }, delay);
+  }
+
+  disconnectedCallback() { this._disconnected = true; if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; } if (this._encryptionRetryTimer) { clearTimeout(this._encryptionRetryTimer); this._encryptionRetryTimer = null; } if (typeof this._unsubscribe === "function") this._unsubscribe(); this._unsubscribe = null; this._ready = false; this._coreReady = false; }
 
   async refreshState() {
     this._state = await this.ws({type:"home_assistant_chat/state"});
@@ -535,8 +563,8 @@ class HomeAssistantChatPanel extends HTMLElement {
     const security = this._state?.settings?.show_security_details && this._keyState ? `<p class="security">🔒 ${text.ready} · ${text.experimental} · ${this._keyState.device_count} ${text.deviceCount} · ${text.security}: ${esc(this._securityCode || "—")}</p>` : "";
     this.shadowRoot.innerHTML = `<style>:host{display:block;height:100dvh;min-height:0;overflow:hidden;background:var(--primary-background-color,#11151b);color:var(--primary-text-color,#e7e9ed);font:14px system-ui}*{box-sizing:border-box}main{--chat-header-height:104px;height:100%;min-height:0;display:grid;grid-template-columns:250px minmax(0,1fr);max-width:1200px;margin:auto}.side{min-height:0;border-right:1px solid var(--divider-color,#2d3540);overflow:auto}.side-top{height:var(--chat-header-height);padding:14px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid var(--divider-color,#2d3540)}.side-top h2{margin:0}.side-top .button{display:grid;place-items:center;width:34px;height:34px;padding:0;font-size:20px;line-height:1}.channel-list{padding:14px 12px}.channel-row{display:flex;align-items:center}.channel-row .channel{flex:1;min-width:0}.channel{display:block;width:100%;text-align:left;background:none;border:0;color:inherit;padding:10px;border-radius:8px;cursor:pointer}.active{background:var(--secondary-background-color,#2d3748)}.content{display:flex;flex-direction:column;min-width:0;min-height:0}.top{height:var(--chat-header-height);padding:14px 18px;border-bottom:1px solid var(--divider-color,#2d3540)}.topline,.header-actions,.chat-heading,.message-head,.row,.actions{display:flex;align-items:center;gap:8px}.topline,.message-head,.row{justify-content:space-between}.header-actions{justify-content:flex-end;flex-wrap:wrap}.top h3{margin:.25rem 0}.private-menu{position:relative}.private-menu summary{display:grid;place-items:center;width:34px;height:34px;border-radius:8px;cursor:pointer;list-style:none}.private-menu summary::-webkit-details-marker{display:none}.private-menu summary:hover{background:var(--secondary-background-color,#2d3748)}.private-menu-popover{position:absolute;top:38px;left:0;z-index:10;display:grid;min-width:190px;padding:6px;border:1px solid var(--divider-color,#465365);border-radius:10px;background:var(--card-background-color,#202a36);box-shadow:0 8px 24px #0007}.sidebar-private-menu .private-menu-popover{left:auto;right:0}.private-menu-popover .button{border:0;text-align:left;background:transparent}.peer-avatar{display:inline-grid;place-items:center;width:34px;height:34px;border-radius:50%;background:var(--accent-color,#03a9f4);color:#fff;font-weight:700}.security{margin:.35rem 0 0;color:var(--success-color,#58c28b);font-size:.85rem}.messages{flex:1;min-height:0;overflow:auto;padding:18px}.message{padding:10px;margin:7px 0;background:var(--card-background-color,#202a36);border-radius:10px;max-width:78%;overflow-wrap:anywhere}.message.deleted{opacity:.7;font-style:italic}.message-head{align-items:flex-start;margin-bottom:4px}.message-head small{min-width:0;padding-top:4px}.mine{margin-left:auto;background:#194e5c}.compose{display:flex;flex:0 0 auto;gap:8px;padding:12px;border-top:1px solid var(--divider-color,#2d3540)}.compose input{flex:1;min-width:0}.button,input,select{border:1px solid var(--divider-color,#465365);border-radius:8px;background:var(--card-background-color,#1b232d);color:inherit;padding:9px}.button{cursor:pointer}.button.delete-message{display:grid;place-items:center;flex:0 0 28px;width:28px;height:28px;padding:0;border:0;background:transparent}.button.delete-message:hover{background:color-mix(in srgb,var(--error-color,#ffb4ab) 12%,transparent)}.delete-message ha-icon{--mdc-icon-size:18px}.button:disabled,input:disabled{opacity:.55;cursor:not-allowed}.danger{color:var(--error-color,#ffb4ab)}.modal{position:fixed;inset:0;z-index:20;background:#0009;display:grid;place-items:center;padding:20px}.dialog{width:min(700px,100%);max-height:90vh;overflow:auto;background:var(--card-background-color,#202a36);border:1px solid var(--divider-color,#4a5868);border-radius:14px;padding:20px}.actions{justify-content:flex-end;margin-top:16px}.tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:14px}.tabs button{background:var(--secondary-background-color,#2d3748);color:inherit;border:0;border-radius:7px;padding:8px;cursor:pointer}.row{padding:8px;border-bottom:1px solid var(--divider-color,#35404d)}label{display:grid;gap:5px;margin:.6rem 0}select[multiple]{min-height:9rem}@media(max-width:700px){main{--chat-header-height:auto;grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}.side{border-right:0}.side-top{height:auto}.channel-list{display:flex;gap:4px;overflow:auto;border-bottom:1px solid var(--divider-color,#2d3540)}.channel-row{flex:0 0 auto}.channel{white-space:nowrap;width:auto}.top{height:auto}.message{max-width:92%}.topline{align-items:flex-start;flex-direction:column}.header-actions{justify-content:flex-start}}</style><main>
       <aside class="side"><div class="side-top"><h2>${text.chat}</h2><button class="button" id="new-private" aria-label="${esc(text.private)}" title="${esc(text.private)}">+</button></div><div class="channel-list">${channels.map((channel) => `<div class="channel-row"><button class="channel ${channel.id === this._active ? "active" : ""}" data-channel="${esc(channel.id)}">${esc(this.channelName(channel))}</button>${this.privateMenu(channel,"sidebar")}</div>`).join("")}</div></aside>
-      <section class="content"><header class="top"><div class="topline"><div class="chat-heading">${current?.kind === "private" && peer ? `<span class="peer-avatar">${esc(initials(peer.name))}</span><h3>${esc(peer.name)}</h3>${this.privateMenu(current)}` : `<h3>${esc(this.channelName(current))}</h3>`}</div><div class="header-actions">${this._state?.is_admin ? `<button class="button" id="admin">${text.admin}</button>` : `<button class="button" id="user-settings">${text.settings}</button>`}</div></div>${security}</header>
-      <div class="messages">${this._waiting ? `<p>${text.waiting} <button class="button" id="reset-key">${text.resetKey}</button></p>` : ""}${this._error ? `<p>${esc(this._error)}</p>` : ""}${messages.length ? messages.map((message) => `<article class="message ${message.sender_id === this._state?.user_id ? "mine" : ""} ${message.deleted ? "deleted" : ""}" data-message="${esc(message.id)}"><div class="message-head"><small>${esc(message.sender_name || "User")} · ${new Date(message.created * 1000).toLocaleString(this.language === "de" ? "de-DE" : "en-US")}</small>${!message.deleted && message.sender_id === this._state?.user_id ? `<button class="button danger delete-message" data-id="${esc(message.id)}" aria-label="${esc(text.delete)}" title="${esc(text.delete)}"><ha-icon icon="mdi:delete-outline" aria-hidden="true"></ha-icon></button>` : ""}</div><span class="body">${message.deleted ? text.messageDeleted : text.encrypted}</span></article>`).join("") : `<p>${text.noMessages}</p>`}</div>
+      <section class="content"><header class="top"><div class="topline"><div class="chat-heading">${current?.kind === "private" && peer ? `<span class="peer-avatar">${esc(initials(peer.name))}</span><h3>${esc(peer.name)}</h3>${this.privateMenu(current)}` : `<h3>${esc(this.channelName(current))}</h3>`}</div><div class="header-actions">${(this._state?.is_admin ?? this._hass?.user?.is_admin) ? `<button class="button" id="admin">${text.admin}</button>` : `<button class="button" id="user-settings">${text.settings}</button>`}</div></div>${security}</header>
+      <div class="messages">${this._waiting ? `<p>${text.waiting} <button class="button" id="reset-key">${text.resetKey}</button></p>` : ""}${this._error ? `<p>${esc(this._error)}</p>` : ""}${this._encryptionError ? `<p>${esc(this._encryptionError)}</p>` : ""}${messages.length ? messages.map((message) => `<article class="message ${message.sender_id === this._state?.user_id ? "mine" : ""} ${message.deleted ? "deleted" : ""}" data-message="${esc(message.id)}"><div class="message-head"><small>${esc(message.sender_name || "User")} · ${new Date(message.created * 1000).toLocaleString(this.language === "de" ? "de-DE" : "en-US")}</small>${!message.deleted && message.sender_id === this._state?.user_id ? `<button class="button danger delete-message" data-id="${esc(message.id)}" aria-label="${esc(text.delete)}" title="${esc(text.delete)}"><ha-icon icon="mdi:delete-outline" aria-hidden="true"></ha-icon></button>` : ""}</div><span class="body">${message.deleted ? text.messageDeleted : text.encrypted}</span></article>`).join("") : `<p>${text.noMessages}</p>`}</div>
       <form class="compose"><input id="message-input" maxlength="4000" autocomplete="off" placeholder="${esc(readOnly ? text.cannotPost : text.write)}" ${readOnly ? "disabled" : ""}><button class="button" ${readOnly ? "disabled" : ""}>${text.send}</button></form></section></main>`;
     this.shadowRoot.querySelectorAll("[data-channel]").forEach((button) => button.addEventListener("click", () => this.selectChannel(button.dataset.channel)));
     this.shadowRoot.querySelector(".compose")?.addEventListener("submit", (event) => this.sendMessage(event));
