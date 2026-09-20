@@ -45,6 +45,14 @@ def test_chat_actions_and_composer_use_the_requested_layout():
     assert '.messages{flex:1;min-height:0;overflow:auto' in source
     assert '.compose{display:flex;flex:0 0 auto' in source
 
+def test_role_specific_settings_windows():
+    source = JS.read_text()
+    assert 'id="admin">${text.admin}' in source
+    assert 'id="user-settings">${text.settings}' in source
+    assert 'async userSettingsDialog()' in source
+    assert 'class="button revoke-own-device"' in source
+    assert 'this.shadowRoot.querySelector("#user-settings")' in source
+
 def test_deleted_message_markers_are_localized_and_admin_configurable():
     source = JS.read_text()
     assert 'messageDeleted:"Message deleted"' in source
