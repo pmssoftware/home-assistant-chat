@@ -13,7 +13,7 @@ Home Assistant Chat is a local custom integration with a native sidebar panel.
 It runs inside Home Assistant and does not require a separate add-on or chat
 server for local use.
 
-Current experimental version: **0.1.15**
+Current experimental version: **0.1.16**
 
 ## Installation
 
