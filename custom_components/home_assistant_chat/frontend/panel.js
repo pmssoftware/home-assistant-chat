@@ -140,7 +140,7 @@ class HomeAssistantChatPanel extends HTMLElement {
   set hass(value) { this._hass = value; if (!this._ready) this.initialize(); }
   set panel(value) { this._panel = value; }
   set narrow(value) { this._narrow = value; }
-  get language() { return (this._hass?.language || this._hass?.locale?.language || "en").startsWith("de") ? "de" : "en"; }
+  get language() { const language=String(globalThis.navigator?.languages?.[0] || globalThis.navigator?.language || this._hass?.language || this._hass?.locale?.language || "en").split(/[-_]/)[0].toLowerCase(); return STRINGS[language] ? language : "en"; }
   get text() { return STRINGS[this.language]; }
   ws(message) { return this._hass.callWS(message); }
 

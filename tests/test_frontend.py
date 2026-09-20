@@ -84,13 +84,22 @@ def test_compact_icon_controls():
     assert '.delete-message{display:grid;place-items:center;flex:0 0 28px;width:28px;height:28px;padding:0;border:0;background:transparent}' in source
     assert '.delete-message ha-icon{--mdc-icon-size:18px}' in source
 
-def test_default_channel_names_follow_home_assistant_language():
+def test_default_channel_names_follow_personal_browser_language():
     source = JS.read_text()
     assert 'announcements:"Announcements"' in source
     assert 'announcements:"Ankündigungen"' in source
+    assert 'globalThis.navigator?.language' in source
+    assert 'globalThis.navigator?.languages?.[0]' in source
+    assert source.index('globalThis.navigator?.languages?.[0]') < source.index('this._hass?.language')
     assert 'if (channel?.id === "public") return this.text.publicChat' in source
     assert 'if (channel?.id === "announcements") return this.text.announcements' in source
     assert '${esc(this.channelName(channel))}' in source
+
+def test_frontend_languages_are_extensible_and_fall_back_to_english():
+    source = JS.read_text()
+    assert 'return STRINGS[language] ? language : "en"' in source
+    assert '.split(/[-_]/)[0].toLowerCase()' in source
+
 
 def test_deleted_message_markers_are_localized_and_admin_configurable():
     source = JS.read_text()
