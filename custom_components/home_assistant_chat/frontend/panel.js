@@ -190,7 +190,7 @@ async function keySecurityCode(key) {
 }
 
 class HomeAssistantChatPanel extends HTMLElement {
-  set hass(value) { this._hass = value; if (!this._ready) this.initialize(); }
+  set hass(value) { this._hass = value; this._disconnected = false; if (!this._ready && !this._initializing) this.initialize(); }
   set panel(value) { this._panel = value; }
   set narrow(value) { this._narrow = value; }
   get language() { const language=String(globalThis.navigator?.languages?.[0] || globalThis.navigator?.language || this._hass?.language || this._hass?.locale?.language || "en").split(/[-_]/)[0].toLowerCase(); return STRINGS[language] ? language : "en"; }
@@ -198,16 +198,30 @@ class HomeAssistantChatPanel extends HTMLElement {
   ws(message) { return this._hass.callWS(message); }
 
   async initialize() {
-    this._ready = true; this._channels = []; this._messages = []; this._active = "public"; this._keyRequests = new Set(); this.render();
+    if (this._initializing || this._disconnected || !this._hass) return;
+    this._initializing = true; this._error = ""; this._channels ||= []; this._messages ||= []; this._active ||= "public"; this._keyRequests ||= new Set(); this.render();
     try {
       const identity = await deviceIdentity();
       await this.ws({type:"home_assistant_chat/device/register", device_id:identity.id, public_key:JSON.stringify(identity.publicKey), label:this.text.device});
-      await this.refreshState(); await this.claimOffers(); if (await dbGet("recovery-code")) await this.updateRecoveryBundle(); await this.selectChannel(this._active);
-      this._unsubscribe = await this._hass.connection.subscribeMessage((event) => this.handleEvent(event), {type:"home_assistant_chat/subscribe"});
-    } catch { this._error = this.text.unavailable; this.render(); }
+      await this.refreshState(); await this.claimOffers();
+      try { if (await dbGet("recovery-code")) await this.updateRecoveryBundle(); } catch { /* Optional recovery sync must never block the chat UI. */ }
+      await this.selectChannel(this._active);
+      if (this._disconnected) { this._initializing = false; return; }
+      if (typeof this._unsubscribe !== "function") this._unsubscribe = await this._hass.connection.subscribeMessage((event) => this.handleEvent(event), {type:"home_assistant_chat/subscribe"});
+      this._ready = true; this._retryAttempt = 0; this._initializing = false; if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; }
+    } catch {
+      this._ready = false; this._initializing = false; this._error = this.text.unavailable; this.render();
+      this.scheduleInitializationRetry();
+    }
   }
 
-  disconnectedCallback() { if (typeof this._unsubscribe === "function") this._unsubscribe(); this._unsubscribe = null; }
+  scheduleInitializationRetry() {
+    if (this._retryTimer || this._disconnected || !this._hass) return;
+    const delays = [500, 1000, 2000, 5000, 10000, 30000]; const delay = delays[Math.min(this._retryAttempt || 0, delays.length - 1)]; this._retryAttempt = Math.min((this._retryAttempt || 0) + 1, delays.length - 1);
+    this._retryTimer = setTimeout(() => { this._retryTimer = null; this.initialize(); }, delay);
+  }
+
+  disconnectedCallback() { this._disconnected = true; if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; } if (typeof this._unsubscribe === "function") this._unsubscribe(); this._unsubscribe = null; this._ready = false; }
 
   async refreshState() {
     this._state = await this.ws({type:"home_assistant_chat/state"});

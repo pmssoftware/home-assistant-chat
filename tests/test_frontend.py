@@ -50,7 +50,7 @@ def test_admin_bindings_and_csp_safe_markup():
 
 def test_key_recovery_requests_are_deduplicated_and_reset_errors_are_localized():
     source = JS.read_text()
-    assert 'this._keyRequests = new Set()' in source
+    assert 'this._keyRequests ||= new Set()' in source
     assert '!this._keyRequests.has(requestKey)' in source
     assert 'this._keyRequests.add(requestKey)' in source
     assert 'this._keyRequests.delete(requestKey)' in source
@@ -188,6 +188,19 @@ def test_recovery_restore_validates_code_bundle_and_aes_key_sizes():
     assert 'salt.length < 16' in source and 'nonce.length !== 12' in source
     assert 'item.key_id.length > 200' in source
     assert 'keyBytes.length !== 32' in source
+
+def test_frontend_initialization_retries_without_duplicate_work():
+    source = JS.read_text()
+    assert 'if (!this._ready && !this._initializing) this.initialize()' in source
+    assert 'this._initializing = true' in source
+    assert 'this._channels ||= []' in source and 'this._messages ||= []' in source
+    assert 'scheduleInitializationRetry()' in source
+    assert 'const delays = [500, 1000, 2000, 5000, 10000, 30000]' in source
+    assert 'if (this._retryTimer || this._disconnected || !this._hass) return' in source
+    assert 'if (typeof this._unsubscribe !== "function") this._unsubscribe =' in source
+    assert 'clearTimeout(this._retryTimer)' in source
+    assert 'this._disconnected = true' in source
+    assert 'Optional recovery sync must never block the chat UI.' in source
 
 
 def test_deleted_message_markers_are_localized_and_admin_configurable():
