@@ -50,7 +50,9 @@ def test_role_specific_settings_windows():
     assert 'id="admin">${text.admin}' in source
     assert 'id="user-settings">${text.settings}' in source
     assert 'async userSettingsDialog()' in source
-    assert 'class="button revoke-own-device"' in source
+    assert 'home_assistant_chat/user/blocked' in source
+    assert 'class="button unblock-user"' in source
+    assert 'home_assistant_chat/user/unblock' in source
     assert 'this.shadowRoot.querySelector("#user-settings")' in source
 
 def test_deleted_message_markers_are_localized_and_admin_configurable():

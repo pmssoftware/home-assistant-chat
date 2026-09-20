@@ -11,7 +11,7 @@ const STRINGS = {
     chat:"Chat", private:"Private chat", device:"Browser device", handle:"Exact enabled Home Assistant username", send:"Send", write:"Write a message",
     cancel:"Cancel", continue:"Continue", delete:"Delete", deleteBoth:"Delete for both", block:"Block", close:"Close", admin:"Administration",
     channels:"Channels", moderation:"Moderation", users:"Users / Access", devices:"Devices / Encryption", settings:"Settings", name:"Name",
-    members:"Members", create:"Create", edit:"Edit", save:"Save", mute:"Mute", unmute:"Unmute", revoke:"Revoke",
+    members:"Members", create:"Create", edit:"Edit", save:"Save", mute:"Mute", unmute:"Unmute", revoke:"Revoke", unblock:"Unblock", blockedUsers:"Blocked users",
     waiting:"Waiting for an active device to share the channel key…", noMessages:"No messages yet", encrypted:"Encrypted message — channel key unavailable",
     security:"Security code", deviceCount:"Devices", enabled:"Chat enabled", allowUsers:"Allow users", encryption:"Experimental encryption",
     retention:"Retention days", showSecurity:"Show encryption details", publicChat:"Public chat", restrictedGroup:"Restricted group",
@@ -21,13 +21,13 @@ const STRINGS = {
     confirmMessageDelete:"Delete this message for everyone?", confirmChannelDelete:"Delete this channel and all of its messages?",
     confirmRevoke:"Revoke this encrypted device?", owner:"Owner", ready:"Encrypted", experimental:"experimental", activeChannel:"Active channel",
     defaultChannel:"Default channel", cannotPost:"You cannot post in this channel.", noUsers:"No users found", noDevices:"No encrypted devices found", noChannels:"No channels found",
-    messageDeleted:"Message deleted", showDeletedMessages:"Show a marker for deleted messages", userSettingsHint:"Manage your own chat encryption devices."
+    messageDeleted:"Message deleted", showDeletedMessages:"Show a marker for deleted messages", userSettingsHint:"Manage the people you have blocked."
   },
   de: {
     chat:"Chat", private:"Privater Chat", device:"Browser-Gerät", handle:"Exakter aktivierter Home-Assistant-Benutzername", send:"Senden",
     write:"Nachricht schreiben", cancel:"Abbrechen", continue:"Weiter", delete:"Löschen", deleteBoth:"Für beide löschen", block:"Blockieren",
     close:"Schließen", admin:"Administration", channels:"Kanäle", moderation:"Moderation", users:"Benutzer / Zugriff", devices:"Geräte / Verschlüsselung",
-    settings:"Einstellungen", name:"Name", members:"Mitglieder", create:"Erstellen", edit:"Bearbeiten", save:"Speichern", mute:"Stummschalten",
+    settings:"Einstellungen", name:"Name", members:"Mitglieder", create:"Erstellen", edit:"Bearbeiten", save:"Speichern", mute:"Stummschalten", unblock:"Entsperren", blockedUsers:"Blockierte Benutzer",
     unmute:"Stummschaltung aufheben", revoke:"Widerrufen", waiting:"Warte darauf, dass ein aktives Gerät den Kanalschlüssel teilt…",
     noMessages:"Noch keine Nachrichten", encrypted:"Verschlüsselte Nachricht — Kanalschlüssel nicht verfügbar", security:"Sicherheitscode",
     deviceCount:"Geräte", enabled:"Chat aktiviert", allowUsers:"Benutzer zulassen", encryption:"Experimentelle Verschlüsselung",
@@ -39,7 +39,7 @@ const STRINGS = {
     confirmRevoke:"Dieses verschlüsselte Gerät widerrufen?", owner:"Besitzer", ready:"Verschlüsselt", experimental:"experimentell",
     activeChannel:"Aktiver Kanal", defaultChannel:"Standardkanal", cannotPost:"Du kannst in diesem Kanal nicht schreiben.",
     noUsers:"Keine Benutzer gefunden", noDevices:"Keine verschlüsselten Geräte gefunden", noChannels:"Keine Kanäle gefunden",
-    messageDeleted:"Nachricht gelöscht", showDeletedMessages:"Markierung für gelöschte Nachrichten anzeigen", userSettingsHint:"Verwalte deine eigenen Geräte für die Chat-Verschlüsselung."
+    messageDeleted:"Nachricht gelöscht", showDeletedMessages:"Markierung für gelöschte Nachrichten anzeigen", userSettingsHint:"Verwalte die von dir blockierten Benutzer."
   }
 };
 
@@ -280,14 +280,22 @@ class HomeAssistantChatPanel extends HTMLElement {
     });
   }
 
+  blockedUsersMarkup(blocked) {
+    return `<h4>${this.text.blockedUsers}</h4>${blocked.length ? blocked.map((user) => `<div class="row"><span>${esc(user.name)}</span><button class="button unblock-user" data-id="${esc(user.id)}">${this.text.unblock}</button></div>`).join("") : `<p>${this.text.noUsers}</p>`}`;
+  }
+
+  bindUnblockActions(container, onUpdated) {
+    container.querySelectorAll(".unblock-user").forEach((button) => button.addEventListener("click", async () => {
+      await this.ws({type:"home_assistant_chat/user/unblock", user_id:button.dataset.id}); await onUpdated();
+    }));
+  }
+
   async userSettingsDialog() {
-    const devices = await this.ws({type:"home_assistant_chat/device/list"});
-    const body = `<p>${this.text.userSettingsHint}</p><h4>${this.text.devices}</h4>${devices.length ? devices.map((item) => `<div class="row"><span>${esc(item.label || item.id)}</span><button class="button revoke-own-device" data-id="${esc(item.id)}">${this.text.revoke}</button></div>`).join("") : `<p>${this.text.noDevices}</p>`}`;
+    const blocked = await this.ws({type:"home_assistant_chat/user/blocked"});
+    const body = `<p>${this.text.userSettingsHint}</p>${this.blockedUsersMarkup(blocked)}`;
     const dialog = this.dialog(this.text.settings, body, `<button class="button close">${this.text.close}</button>`);
     dialog.querySelector(".close").addEventListener("click", () => dialog.remove());
-    dialog.querySelectorAll(".revoke-own-device").forEach((button) => button.addEventListener("click", () => this.confirmDialog(this.text.confirmRevoke, this.text.revoke, async () => {
-      await this.ws({type:"home_assistant_chat/device/revoke", device_id:button.dataset.id}); dialog.remove(); await this.refreshState(); await this.userSettingsDialog();
-    })));
+    this.bindUnblockActions(dialog, async () => { dialog.remove(); await this.refreshState(); await this.userSettingsDialog(); });
   }
 
   async adminDialog() {
@@ -315,9 +323,11 @@ class HomeAssistantChatPanel extends HTMLElement {
         content.querySelectorAll(".revoke-device").forEach((button) => button.addEventListener("click", () => this.confirmDialog(this.text.confirmRevoke, this.text.revoke, async () => { await this.ws({type:"home_assistant_chat/device/revoke", device_id:button.dataset.id}); await reload(); await show("devices"); })));
       } else {
         const settings = this._state.settings;
+        const blocked = await this.ws({type:"home_assistant_chat/user/blocked"});
         content.innerHTML = `<label class="row">${this.text.enabled}<input id="setting-enabled" type="checkbox" ${settings.enabled ? "checked" : ""}></label><label class="row">${this.text.allowUsers}<input id="setting-users" type="checkbox" ${settings.allow_users ? "checked" : ""}></label>
-          <label class="row">${this.text.retention}<input id="setting-retention" type="number" min="0" max="3650" value="${Number(settings.retention_days || 0)}"></label><label class="row">${this.text.showSecurity}<input id="setting-security" type="checkbox" ${settings.show_security_details ? "checked" : ""}></label><label class="row">${this.text.showDeletedMessages}<input id="setting-deleted-markers" type="checkbox" ${settings.show_deleted_messages ? "checked" : ""}></label><button class="button save-settings">${this.text.save}</button>`;
+          <label class="row">${this.text.retention}<input id="setting-retention" type="number" min="0" max="3650" value="${Number(settings.retention_days || 0)}"></label><label class="row">${this.text.showSecurity}<input id="setting-security" type="checkbox" ${settings.show_security_details ? "checked" : ""}></label><label class="row">${this.text.showDeletedMessages}<input id="setting-deleted-markers" type="checkbox" ${settings.show_deleted_messages ? "checked" : ""}></label><button class="button save-settings">${this.text.save}</button>${this.blockedUsersMarkup(blocked)}`;
         content.querySelector(".save-settings").addEventListener("click", async () => { await this.ws({type:"home_assistant_chat/settings", enabled:content.querySelector("#setting-enabled").checked, allow_users:content.querySelector("#setting-users").checked, retention_days:Number(content.querySelector("#setting-retention").value), show_security_details:content.querySelector("#setting-security").checked, show_deleted_messages:content.querySelector("#setting-deleted-markers").checked}); await reload(); await show("settings"); });
+        this.bindUnblockActions(content, async () => { await reload(); await show("settings"); });
       }
     };
     dialog.querySelector(".close").addEventListener("click", () => dialog.remove());

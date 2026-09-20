@@ -23,7 +23,7 @@ async def _members(hass, raw: list[str]) -> set[str]:
 def async_register_websocket(hass: HomeAssistant, store) -> None:
     if hass.data.setdefault(f"{DOMAIN}_ws_registered", False): return
     hass.data[f"{DOMAIN}_ws_registered"] = True
-    for handler in (_state,_subscribe,_send,_private,_channel_create,_channel_edit,_channel_delete,_channel_members,_message_delete,_private_delete,_block,_unblock,_mute,_seen,_users,_user_access,_device_register,_device_list,_device_revoke,_key_offer,_key_state,_key_devices,_key_request,_settings): websocket_api.async_register_command(hass, handler)
+    for handler in (_state,_subscribe,_send,_private,_channel_create,_channel_edit,_channel_delete,_channel_members,_message_delete,_private_delete,_block,_blocked_users,_unblock,_mute,_seen,_users,_user_access,_device_register,_device_list,_device_revoke,_key_offer,_key_state,_key_devices,_key_request,_settings): websocket_api.async_register_command(hass, handler)
 
 @websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/state"})
 @websocket_api.async_response
@@ -155,6 +155,15 @@ async def _block(hass, connection, msg):
 @websocket_api.async_response
 async def _unblock(hass, connection, msg):
     store=_store(hass); store.domain.remove_block(_uid(connection),msg["user_id"]); await store.changed("unblock",user_id=msg["user_id"]); _result(connection,msg["id"])
+
+@websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/user/blocked"})
+@websocket_api.async_response
+async def _blocked_users(hass, connection, msg):
+    store=_store(hass)
+    if not _require_access(store,connection,msg["id"]): return
+    blocked=set(store.data["blocks"].get(_uid(connection),[]))
+    users=await hass.auth.async_get_users()
+    _result(connection,msg["id"],[{"id":user.id,"name":user.name} for user in users if user.id in blocked])
 
 @websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/admin/mute", vol.Required("user_id"): str, vol.Required("muted"): bool})
 @websocket_api.require_admin
