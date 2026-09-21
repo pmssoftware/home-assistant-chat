@@ -40,7 +40,12 @@ def _message_page(store, channel_id: str, names: dict[str, str], show_deleted: b
     if cursor is not None:
         messages = [message for message in messages if sort_key(message) < cursor]
     page = messages[-MESSAGE_PAGE_SIZE:]
-    result = [{**message, "sender_name": names.get(message.get("sender_id"), "User")} for message in page]
+    result = []; include_sender_identity=store.data["channels"].get(channel_id,{}).get("kind")=="group"
+    for message in page:
+        sender_id=message.get("sender_id"); item={**message,"sender_name":names.get(sender_id,"User")}
+        if include_sender_identity and sender_id:
+            item["sender_identity"]=str(store.domain.ensure_identity(sender_id)); item["sender_identity_address"]=store.identity_address(sender_id)
+        result.append(item)
     oldest = page[0] if page else None
     return {"messages":result,"has_older_messages":bool(messages and oldest and len(messages) > len(page)),"oldest_cursor":f"{sort_key(oldest)[0]}:{oldest.get('id')}" if oldest else None}
 

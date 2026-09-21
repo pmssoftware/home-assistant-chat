@@ -200,6 +200,25 @@ def test_identity_is_visible_copyable_and_peer_uuid_is_not_contact_identifier():
     assert 'esc(identity || "—")' in source
     assert 'channel.peer.id}</code>' not in source
 
+def test_new_private_dialog_shows_own_identity_and_qr_controls():
+    source = JS.read_text()
+    start = source.index('privateDialog()')
+    end = source.index('blockPrivate(channel)', start)
+    dialog = source[start:end]
+    assert '${this.identityMarkup()}' in dialog
+    assert 'this.bindIdentityCopy(dialog)' in dialog
+    assert '.show-identity-qr' in dialog
+
+def test_group_sender_names_open_participant_actions():
+    source = JS.read_text()
+    assert 'current?.kind === "group" && message.sender_id !== this._state?.user_id' in source
+    assert 'class="message-sender"' in source
+    assert 'groupParticipantDialog(message)' in source
+    assert 'group-peer-private' in source
+    assert 'group-peer-silence' in source
+    assert 'group-peer-block' in source
+    assert 'group-peer-delete' in source
+
 def test_recovery_bundle_is_client_side_pbkdf2_aes_gcm_and_idb_backed():
     source = JS.read_text()
     assert 'dbEntriesWithPrefixForScope(prefix, scope)' in source
