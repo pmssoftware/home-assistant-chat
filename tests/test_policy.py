@@ -16,8 +16,8 @@ for name in ("const", "domain"):
 ChatDomain = sys.modules["custom_components.home_assistant_chat.domain"].ChatDomain
 validate_envelope = sys.modules["custom_components.home_assistant_chat.domain"].validate_envelope
 
-def envelope():
-    return {"version":"ha-chat/1","device_id":"device-a","counter":1,"nonce":"AAAAAAAAAAAAAAAA","key_id":"public:1","aad":"cHVibGlj"}
+def envelope(channel="public"):
+    return {"version":"ha-chat/1","device_id":"device-a","counter":1,"nonce":"AAAAAAAAAAAAAAAA","key_id":f"{channel}:1","aad":"cHVibGlj"}
 
 def test_exact_handle_privacy_and_invalid_is_empty():
     d=ChatDomain.fresh()
@@ -39,10 +39,10 @@ def test_block_and_one_sided_unblock():
 
 def test_delete_announcements_and_envelope():
     d=ChatDomain.fresh(); admins={"admin"}; d.register_device("admin","device-a","public-key")
-    try: d.add_message("user","announcements","Y2lwaGVy",envelope(),admins)
+    try: d.add_message("user","announcements","Y2lwaGVy",envelope("announcements"),admins)
     except PermissionError: pass
     else: assert False
-    msg=d.add_message("admin","announcements","Y2lwaGVy",envelope(),admins)
+    msg=d.add_message("admin","announcements","Y2lwaGVy",envelope("announcements"),admins)
     d.delete_message("admin",msg["id"],admins)
     assert d.data["messages"][msg["id"]]["ciphertext"] == ""
     validate_envelope("Y2lwaGVy",envelope())

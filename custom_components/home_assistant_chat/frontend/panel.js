@@ -106,6 +106,15 @@ async function dbPut(key, value) {
   });
 }
 
+async function dbDelete(key) {
+  const database = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const request = database.transaction("values", "readwrite").objectStore("values").delete(key);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
 // IndexedDB has no portable startsWith query, so enumerate the small local key
 // store and filter in memory. This never uploads the keys themselves.
 async function dbEntriesWithPrefix(prefix) {
@@ -145,6 +154,11 @@ async function channelKey(channelId, epoch, create = false) {
   return key;
 }
 
+async function channelKeyCommitment(key) {
+  if (!key) return null;
+  return b64(await crypto.subtle.digest("SHA-256", await crypto.subtle.exportKey("raw", key)));
+}
+
 async function wrapChannelKey(key, target) {
   const identity = await deviceIdentity();
   const publicKey = await crypto.subtle.importKey("jwk", JSON.parse(target.public_key), {name:"ECDH", namedCurve:"P-256"}, false, []);
@@ -172,7 +186,8 @@ async function encryptMessage(channelId, epoch, text) {
   identity.counter += 1;
   await dbPut("device", identity);
   const ciphertext = await crypto.subtle.encrypt({name:"AES-GCM", iv:nonce, additionalData}, key, encoder.encode(text));
-  return {ciphertext:b64(ciphertext), envelope:{version:"ha-chat/1", device_id:identity.id, counter:identity.counter, nonce:b64(nonce), key_id:`${channelId}:${epoch}`, aad:b64(additionalData)}};
+  const commitment=await channelKeyCommitment(key);
+  return {ciphertext:b64(ciphertext), envelope:{version:"ha-chat/1", device_id:identity.id, counter:identity.counter, nonce:b64(nonce), key_id:`${channelId}:${epoch}`, key_commitment:commitment, aad:b64(additionalData)}};
 }
 
 async function decryptMessage(message) {
@@ -276,8 +291,14 @@ class HomeAssistantChatPanel extends HTMLElement {
       try {
         const state = await this.ws({type:"home_assistant_chat/key/state", channel_id:channel.id});
         for (const group of Object.values(state.offers || {})) for (const offer of Object.values(group)) if (offer.device_id === identity.id) {
-          const epoch = offer.key_id.split(":").pop(); if (await channelKey(channel.id, epoch)) continue;
-          await unwrapChannelKey(channel.id, offer); imported = true; this._keyRequests.delete(`${channel.id}:${epoch}`);
+          const epoch = offer.key_id.split(":").pop(); const storageKey=`key:${channel.id}:${epoch}`; const existing=await channelKey(channel.id,epoch); const expected=state.commitments?.[offer.key_id] || null;
+          if (expected && offer.key_commitment && offer.key_commitment !== expected) continue;
+          if (existing && (!expected || await channelKeyCommitment(existing) === expected)) continue;
+          if (existing) await dbDelete(storageKey);
+          await unwrapChannelKey(channel.id, offer);
+          const importedKey=await channelKey(channel.id,epoch);
+          if (expected && await channelKeyCommitment(importedKey) !== expected) { await dbDelete(storageKey); continue; }
+          imported = true; this._keyRequests.delete(`${channel.id}:${epoch}`);
         }
       } catch { /* inaccessible channels are omitted */ }
     }
@@ -288,7 +309,9 @@ class HomeAssistantChatPanel extends HTMLElement {
     const channel = this._channels.find((item) => item.id === channelId); if (!channel) return;
     try {
       const imported = await this.claimOffers(); if (imported) await this.updateRecoveryBundle(); this._keyState = await this.ws({type:"home_assistant_chat/key/state", channel_id:channelId});
-      const key = await channelKey(channelId, channel.key_epoch || 1); this._securityCode = await keySecurityCode(key); const hasMessages = this._messages.some((message) => message.channel_id === channelId);
+      const epoch=channel.key_epoch || 1; let key = await channelKey(channelId,epoch); const expected=this._keyState?.commitment || null;
+      if (key && expected && await channelKeyCommitment(key) !== expected) { await dbDelete(`key:${channelId}:${epoch}`); key=null; }
+      this._securityCode = await keySecurityCode(key); const hasMessages = this._messages.some((message) => message.channel_id === channelId);
       this._waiting = !key && hasMessages;
       const requestKey = `${channelId}:${channel.key_epoch || 1}`;
       if (this._waiting && !this._keyRequests.has(requestKey)) { this._keyRequests.add(requestKey); try { const identity = await deviceIdentity(); await this.ws({type:"home_assistant_chat/key/request", channel_id:channelId, device_id:identity.id}); } catch (error) { this._keyRequests.delete(requestKey); throw error; } }
@@ -305,12 +328,13 @@ class HomeAssistantChatPanel extends HTMLElement {
   async shareKey(channelId, epoch) {
     const key = await channelKey(channelId, epoch); if (!key) return;
     try {
-      const identity = await deviceIdentity();
+      const identity = await deviceIdentity(); const commitment=await channelKeyCommitment(key);
       for (const target of await this.ws({type:"home_assistant_chat/key/devices", channel_id:channelId})) {
         if (target.id === identity.id) continue;
-        await this.ws({type:"home_assistant_chat/key/offer", channel_id:channelId, device_id:target.id, key_id:`${channelId}:${epoch}`, wrapped_key:await wrapChannelKey(key, target)});
+        try { await this.ws({type:"home_assistant_chat/key/offer", channel_id:channelId, device_id:target.id, key_id:`${channelId}:${epoch}`, key_commitment:commitment, wrapped_key:await wrapChannelKey(key, target)}); }
+        catch { /* One stale device must not prevent sharing with the others. */ }
       }
-    } catch { /* revoked or blocked recipients are skipped */ }
+    } catch { /* inaccessible channels are skipped */ }
   }
 
   resetEncryption(channel) {
@@ -343,10 +367,12 @@ class HomeAssistantChatPanel extends HTMLElement {
     event.preventDefault(); const input = this.shadowRoot.querySelector("#message-input"); const channel = this._channels.find((item) => item.id === this._active);
     const value = input.value.trim(); if (!channel || !value || this.cannotPost(channel)) return; const epoch = channel.key_epoch || 1;
     try {
-      if (!await channelKey(channel.id, epoch) && this._messages.some((message) => message.channel_id === channel.id)) { this._waiting = true; await this.updateKeyState(channel.id); return; }
-      const encrypted = await encryptMessage(channel.id, epoch, value); await this.shareKey(channel.id, epoch); await this.updateRecoveryBundle();
-      await this.ws({type:"home_assistant_chat/send", channel_id:channel.id, ...encrypted}); input.value = "";
-    } catch { this._error = this.text.unavailable; this.render(); }
+      const state=await this.ws({type:"home_assistant_chat/key/state",channel_id:channel.id}); let localKey=await channelKey(channel.id,epoch);
+      if (localKey && state.commitment && await channelKeyCommitment(localKey) !== state.commitment) { await dbDelete(`key:${channel.id}:${epoch}`); localKey=null; }
+      if (!localKey && this._messages.some((message) => message.channel_id === channel.id)) { this._waiting = true; await this.updateKeyState(channel.id); return; }
+      const encrypted = await encryptMessage(channel.id, epoch, value);
+      await this.ws({type:"home_assistant_chat/send", channel_id:channel.id, ...encrypted}); await this.shareKey(channel.id, epoch); await this.updateRecoveryBundle(); input.value = "";
+    } catch (error) { if (String(error?.code || error?.message).includes("key_commitment_conflict")) { await this.refreshState(); this._waiting=true; await this.updateKeyState(channel.id); } else { this._error = this.text.unavailable; this.render(); } }
   }
 
   identityValue() { return String(this._state?.identity || ""); }

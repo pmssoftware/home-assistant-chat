@@ -18,7 +18,7 @@ def env(device="d",counter=1,key="public:1"):
 def test_migration_adds_new_collections_and_defaults():
     d=ChatDomain({"schema_version":0,"server_id":"server_old","channels":{},"messages":{}})
     assert d.migrate()
-    assert d.data["schema_version"] == 4
+    assert d.data["schema_version"] == 5
     assert {"blocks","mutes","devices","keys","seen","replay","users"} <= d.data.keys()
 
 def test_migration_repairs_identity_reverse_index():
@@ -73,12 +73,22 @@ def test_private_chat_resolves_numeric_identity_and_preserves_name_lookup():
 
 def test_replay_protection_and_key_epoch_rotation():
     d=ChatDomain.fresh();d.register_device("admin","d","pub")
-    d.add_message("admin","public","Y2lwaGVy",env(),{"admin"})
-    try:d.add_message("admin","public","Y2lwaGVy",env(),{"admin"})
+    first=env(); first["key_commitment"]="A"*43+"="; d.add_message("admin","public","Y2lwaGVy",first,{"admin"})
+    try:d.add_message("admin","public","Y2lwaGVy",{**env(counter=1),"key_commitment":"A"*43+"="},{"admin"})
     except ValueError as err:assert str(err)=="replayed_message"
     else:assert False
     before=d.data["channels"]["public"]["key_epoch"];d.set_members("admin",{"admin"},"public",{"admin","u"})
     assert d.data["channels"]["public"]["key_epoch"]==before+1
+
+def test_first_channel_key_commitment_wins_and_is_exposed_in_key_state():
+    d=ChatDomain.fresh(); d.register_device("alice","device-a","pub-a"); d.register_device("bob","device-b","pub-b")
+    first="A"*43+"="; second="B"*43+"="
+    d.add_message("alice","public","Y2lwaGVy",{**env("device-a",1),"key_commitment":first},{"alice"})
+    state=d.key_state("bob","public",set())
+    assert state["commitment"] == first and state["commitments"]["public:1"] == first
+    try: d.add_message("bob","public","Y2lwaGVy",{**env("device-b",1),"key_commitment":second},{"alice"})
+    except ValueError as err: assert str(err) == "key_commitment_conflict"
+    else: assert False
 
 def test_mute_private_close_and_seen():
     d=ChatDomain.fresh();d.register_device("a","d","pub");d.set_mute("a","b",True,{"a"})
@@ -108,7 +118,8 @@ def test_channel_lifecycle_access_and_device_revoke():
 def test_announcements_are_visible_but_read_only_and_key_offers_use_visibility():
     d=ChatDomain.fresh(); d.register_device("u","du","pub-u")
     assert "announcements" in {c["id"] for c in d.channels_for("u",set(),True,None)}
-    try:d.add_message("u","announcements","Y2lwaGVy",env("du"),set())
+    announcement_env=env("du"); announcement_env["key_id"]="announcements:1"
+    try:d.add_message("u","announcements","Y2lwaGVy",announcement_env,set())
     except PermissionError:pass
     else:assert False
     wrapped='{"sender_device_id":"du","sender_public":{},"nonce":"AA==","ciphertext":"AA=="}'

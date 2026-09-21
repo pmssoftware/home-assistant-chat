@@ -36,6 +36,17 @@ def test_unrecoverable_keys_have_an_explicit_new_key_fallback():
     assert 'device_id:identity.id,expected_epoch:channel.key_epoch || 1' in source
     assert 'await channelKey(channel.id,result.key_epoch,true)' in source
 
+def test_conflicting_same_epoch_keys_are_discarded_and_recovered():
+    source = JS.read_text()
+    assert 'async function channelKeyCommitment(key)' in source
+    assert 'async function dbDelete(key)' in source
+    assert 'state.commitments?.[offer.key_id]' in source
+    assert 'offer.key_commitment !== expected' in source
+    assert 'key_commitment:commitment' in source
+    assert 'await channelKeyCommitment(existing) === expected' in source
+    assert 'await dbDelete(`key:${channelId}:${epoch}`)' in source
+    assert 'key_commitment_conflict' in source
+
 def test_admin_bindings_and_csp_safe_markup():
     source=JS.read_text()
     assert 'dialog.querySelectorAll("[data-tab]")' in source
@@ -179,7 +190,7 @@ def test_recovery_updates_are_fingerprinted_and_imports_are_deduplicated():
     assert 'crypto.subtle.digest("SHA-256", fingerprintInput)' in source
     assert 'this._recoveryFingerprint === fingerprint' in source
     assert 'const imported = await this.claimOffers()' in source
-    assert 'if (await channelKey(channel.id, epoch)) continue' in source
+    assert 'if (existing && (!expected || await channelKeyCommitment(existing) === expected)) continue' in source
     assert 'return imported' in source
     assert 'iterations > 1000000' in source
 

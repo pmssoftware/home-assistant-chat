@@ -72,10 +72,10 @@ class ChatDomain:
     @classmethod
     def fresh(cls, server_id: str | None = None) -> "ChatDomain":
         sid = server_id or new_id("server")
-        return cls({"schema_version": 4, "server_id": sid, "channels": {
+        return cls({"schema_version": 5, "server_id": sid, "channels": {
             "public": {"id":"public","kind":"public","name":"Public chat","restricted":False,"members":[],"key_epoch":1},
             "announcements": {"id":"announcements","kind":"announcement","name":"Announcements","restricted":False,"members":[],"key_epoch":1},
-        }, "messages": {}, "blocks": {}, "mutes": {}, "silenced": {}, "devices": {}, "keys": {}, "key_requests": {}, "seen": {}, "replay": {}, "users": {"allowed": None}, "identities": {}, "identity_users": {}, "recovery": {}})
+        }, "messages": {}, "blocks": {}, "mutes": {}, "silenced": {}, "devices": {}, "keys": {}, "key_requests": {}, "key_commitments": {}, "seen": {}, "replay": {}, "users": {"allowed": None}, "identities": {}, "identity_users": {}, "recovery": {}})
 
     def migrate(self) -> bool:
         changed = False; version = self.data.get("schema_version", 0); defaults = self.fresh(self.data.get("server_id")).data
@@ -85,7 +85,7 @@ class ChatDomain:
         if announcements and announcements.get("restricted") is not False:
             announcements["restricted"] = False
             changed = True
-        if version < 4: self.data["schema_version"] = 4; changed = True
+        if version < 5: self.data["schema_version"] = 5; changed = True
         if "identities" not in self.data: self.data["identities"] = {}; changed = True
         if "identity_users" not in self.data: self.data["identity_users"] = {}; changed = True
         repaired={}
@@ -235,9 +235,18 @@ class ChatDomain:
     def add_message(self, actor: str, channel_id: str, ciphertext: str, envelope: dict[str, Any], admins: set[str], now: float | None = None) -> dict[str, Any]:
         if not self.can_post(channel_id, actor, admins): raise PermissionError("channel_access")
         validate_envelope(ciphertext, envelope)
+        commitment=envelope.get("key_commitment"); key_id=envelope.get("key_id")
+        if commitment is None: commitment = ""
+        if commitment and (not isinstance(commitment,str) or not re.fullmatch(r"[A-Za-z0-9+/]{43}=",commitment)): raise ValueError("invalid_key_commitment")
+        channel=self.data["channels"][channel_id]
+        if key_id != f"{channel_id}:{channel.get('key_epoch',1)}": raise ValueError("invalid_key_id")
         device_id=envelope["device_id"]
         if device_id not in self.data["devices"].get(actor, {}): raise ValueError("unknown_device")
         if envelope["counter"] <= self.data["replay"].get(device_id, 0): raise ValueError("replayed_message")
+        committed=self.data["key_commitments"].get(channel_id,{}).get(key_id)
+        if commitment:
+            if committed and committed != commitment: raise ValueError("key_commitment_conflict")
+            self.data["key_commitments"].setdefault(channel_id,{})[key_id]=commitment
         self.data["replay"][device_id] = envelope["counter"]
         message_id=new_id("message")
         msg={"id":message_id,"channel_id":channel_id,"sender_id":actor,"origin_server_id":self.data["server_id"],"protocol_version":PROTOCOL_VERSION,"ciphertext":ciphertext,"envelope":envelope,"created":now or time.time(),"deleted":False}
@@ -265,17 +274,20 @@ class ChatDomain:
         device = {"id":device_id,"user_id":user_id,"public_key":public_key,"label":label[:80],"last_seen":time.time()}
         self.data["devices"].setdefault(user_id,{})[device_id] = device
         return {k:v for k,v in device.items() if k != "public_key"}
-    def offer_key(self, actor: str, channel_id: str, device_id: str, key_id: str, wrapped_key: str, admins: set[str]) -> None:
+    def offer_key(self, actor: str, channel_id: str, device_id: str, key_id: str, wrapped_key: str, admins: set[str], key_commitment: str = "") -> None:
         if not self.can_view(channel_id, actor, admins): raise PermissionError("channel_access")
         if not all(isinstance(x,str) and x for x in (device_id,key_id,wrapped_key)): raise ValueError("invalid_key_offer")
         channel = self.data["channels"][channel_id]
         if key_id != f"{channel_id}:{channel.get('key_epoch', 1)}": raise ValueError("invalid_key_offer")
+        if key_commitment and not re.fullmatch(r"[A-Za-z0-9+/]{43}=",key_commitment): raise ValueError("invalid_key_offer")
+        committed=self.data.get("key_commitments",{}).get(channel_id,{}).get(key_id)
+        if committed and key_commitment != committed: raise ValueError("key_commitment_conflict")
         target_owner = next((uid for uid, devices in self.data["devices"].items() if device_id in devices), None)
         if target_owner is None or not self.can_view(channel_id, target_owner, admins): raise ValueError("invalid_key_offer")
         try: wrapped=json.loads(wrapped_key)
         except (TypeError,ValueError) as err: raise ValueError("invalid_key_offer") from err
         if wrapped.get("sender_device_id") not in self.data["devices"].get(actor,{}): raise ValueError("invalid_key_offer")
-        self.data["keys"].setdefault(channel_id,{}).setdefault(key_id,{})[device_id] = {"device_id":device_id,"wrapped_key":wrapped_key,"from_device":actor,"from_device_id":wrapped["sender_device_id"]}
+        self.data["keys"].setdefault(channel_id,{}).setdefault(key_id,{})[device_id] = {"device_id":device_id,"wrapped_key":wrapped_key,"key_commitment":key_commitment,"from_device":actor,"from_device_id":wrapped["sender_device_id"]}
     def key_state(self, user_id: str, channel_id: str, admins: set[str] | None = None) -> dict[str, Any]:
         if not self.can_view(channel_id, user_id, admins or set()): raise PermissionError("channel_access")
         devices = self.data["devices"].get(user_id,{})
@@ -284,7 +296,9 @@ class ChatDomain:
         channel = self.data["channels"][channel_id]
         participant_ids = channel["members"] if channel["restricted"] else list(self.data["devices"])
         device_count = sum(len(self.data["devices"].get(uid, {})) for uid in participant_ids)
-        return {"state":"ready" if available else "waiting_for_device","device_count":device_count,"offers":{key_id:{device_id:{**offer,"key_id":key_id} for device_id,offer in group.items() if device_id in own_ids} for key_id,group in offers.items()}}
+        key_id=f"{channel_id}:{channel.get('key_epoch',1)}"
+        commitments=dict(self.data.get("key_commitments",{}).get(channel_id,{}))
+        return {"state":"ready" if available else "waiting_for_device","device_count":device_count,"commitment":commitments.get(key_id),"commitments":commitments,"offers":{offer_key_id:{device_id:{**offer,"key_id":offer_key_id} for device_id,offer in group.items() if device_id in own_ids} for offer_key_id,group in offers.items()}}
     def reset_channel_key(self, actor: str, channel_id: str, device_id: str, expected_epoch: int, admins: set[str] | None = None) -> int:
         if not self.can_view(channel_id,actor,admins or set()): raise PermissionError("channel_access")
         channel=self.data["channels"][channel_id]

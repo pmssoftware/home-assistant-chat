@@ -248,11 +248,11 @@ async def _device_revoke(hass, connection, msg):
     except (PermissionError,KeyError) as err: _error(connection,msg["id"],str(err))
     else: _result(connection,msg["id"])
 
-@websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/key/offer", vol.Required("channel_id"): str, vol.Required("device_id"): str, vol.Required("key_id"): str, vol.Required("wrapped_key"): str})
+@websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/key/offer", vol.Required("channel_id"): str, vol.Required("device_id"): str, vol.Required("key_id"): str, vol.Required("key_commitment"): str, vol.Required("wrapped_key"): str})
 @websocket_api.async_response
 async def _key_offer(hass, connection, msg):
     store=_store(hass)
-    try: store.domain.offer_key(_uid(connection),msg["channel_id"],msg["device_id"],msg["key_id"],msg["wrapped_key"],_admins(connection)); await store.changed("key_offer",channel_id=msg["channel_id"])
+    try: store.domain.offer_key(_uid(connection),msg["channel_id"],msg["device_id"],msg["key_id"],msg["wrapped_key"],_admins(connection),msg["key_commitment"]); await store.changed("key_offer",channel_id=msg["channel_id"])
     except (PermissionError,ValueError) as err: _error(connection,msg["id"],str(err))
     else: _result(connection,msg["id"])
 
