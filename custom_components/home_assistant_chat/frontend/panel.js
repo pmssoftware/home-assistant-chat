@@ -16,7 +16,7 @@ const STRINGS = {
     cancel:"Cancel", continue:"Continue", delete:"Delete", deleteBoth:"Delete entire chat", block:"Block", close:"Close", admin:"Administration",
     channels:"Channels", moderation:"Moderation", users:"Users / Access", devices:"Devices / Encryption", settings:"Settings", name:"Name",
     members:"Members", create:"Create", edit:"Edit", save:"Save", mute:"Mute", unmute:"Unmute", revoke:"Revoke", unblock:"Unblock", blockedUsers:"Blocked users",
-    waiting:"Waiting for an active device to share the channel key…", noMessages:"No messages yet", encrypted:"Encrypted message — channel key unavailable",
+    waiting:"Waiting for an active device to share the channel key…", loadOlder:"Load older messages", noMessages:"No messages yet", encrypted:"Encrypted message — channel key unavailable",
     security:"Security code", deviceCount:"Devices", enabled:"Chat enabled", allowUsers:"Allow users", encryption:"Experimental encryption",
     retention:"Retention days", showSecurity:"Show encryption details", publicChat:"Public chat", restrictedGroup:"Restricted group",
     publicAnnouncement:"Public announcement", restrictedAnnouncement:"Restricted announcement", unavailable:"Chat unavailable",
@@ -35,7 +35,7 @@ const STRINGS = {
     close:"Schließen", admin:"Administration", channels:"Kanäle", moderation:"Moderation", users:"Benutzer / Zugriff", devices:"Geräte / Verschlüsselung",
     settings:"Einstellungen", name:"Name", members:"Mitglieder", create:"Erstellen", edit:"Bearbeiten", save:"Speichern", mute:"Stummschalten", unblock:"Entsperren", blockedUsers:"Blockierte Benutzer",
     unmute:"Stummschaltung aufheben", revoke:"Widerrufen", waiting:"Warte darauf, dass ein aktives Gerät den Kanalschlüssel teilt…",
-    noMessages:"Noch keine Nachrichten", encrypted:"Verschlüsselte Nachricht — Kanalschlüssel nicht verfügbar", security:"Sicherheitscode",
+    noMessages:"Noch keine Nachrichten", loadOlder:"Ältere Nachrichten laden", encrypted:"Verschlüsselte Nachricht — Kanalschlüssel nicht verfügbar", security:"Sicherheitscode",
     deviceCount:"Geräte", enabled:"Chat aktiviert", allowUsers:"Benutzer zulassen", encryption:"Experimentelle Verschlüsselung",
     retention:"Aufbewahrungstage", showSecurity:"Verschlüsselungsdetails anzeigen", publicChat:"Öffentlicher Chat",
     restrictedGroup:"Eingeschränkte Gruppe", publicAnnouncement:"Öffentliche Ankündigung", restrictedAnnouncement:"Eingeschränkte Ankündigung",
@@ -74,6 +74,47 @@ function migrateStorage(transaction, sourceName, target) {
   };
 }
 
+// Browser crypto is local state, so it must never be shared between HA
+// servers or users that happen to use the same browser profile.  The scope is
+// selected from the authoritative state response before any crypto helper is
+// called.  Draft keys already contain their own server/user scope and remain
+// unprefixed in this store.
+let activeStorageScope = "";
+let storageScopePromise = null;
+
+function storageScopeFor(state) {
+  const server = String(state?.server_id || state?.serverId || "local");
+  const user = String(state?.user_id || "");
+  if (!user) throw new Error("storage_scope_unavailable");
+  return `scope:${base64Url(encoder.encode(`${server}\u0000${user}`))}:`;
+}
+
+function physicalStorageKey(key, scoped = true) {
+  const value = String(key);
+  if (!scoped || value.startsWith("draft:")) return value;
+  if (!activeStorageScope) throw new Error("storage_scope_unavailable");
+  return `${activeStorageScope}${value}`;
+}
+
+function physicalStorageKeyFor(key, scope) {
+  const value = String(key);
+  if (value.startsWith("draft:")) return value;
+  if (!scope) throw new Error("storage_scope_unavailable");
+  return `${scope}${value}`;
+}
+
+async function configureStorageScope(state) {
+  const next = storageScopeFor(state);
+  if (next !== activeStorageScope) {
+    activeStorageScope = next;
+    storageScopePromise = migrateLegacyStorage(state, next);
+  } else if (!storageScopePromise) {
+    storageScopePromise = migrateLegacyStorage(state, next);
+  }
+  await storageScopePromise;
+  return next;
+}
+
 function openDatabase() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open("ha-chat-device-v1", 3);
@@ -88,7 +129,7 @@ function openDatabase() {
   });
 }
 
-async function dbGet(key) {
+async function dbGetRaw(key) {
   const database = await openDatabase();
   return new Promise((resolve, reject) => {
     const request = database.transaction("values").objectStore("values").get(key);
@@ -97,7 +138,7 @@ async function dbGet(key) {
   });
 }
 
-async function dbPut(key, value) {
+async function dbPutRaw(key, value) {
   const database = await openDatabase();
   return new Promise((resolve, reject) => {
     const request = database.transaction("values", "readwrite").objectStore("values").put(value, key);
@@ -106,7 +147,7 @@ async function dbPut(key, value) {
   });
 }
 
-async function dbDelete(key) {
+async function dbDeleteRaw(key) {
   const database = await openDatabase();
   return new Promise((resolve, reject) => {
     const request = database.transaction("values", "readwrite").objectStore("values").delete(key);
@@ -115,14 +156,60 @@ async function dbDelete(key) {
   });
 }
 
-// IndexedDB has no portable startsWith query, so enumerate the small local key
-// store and filter in memory. This never uploads the keys themselves.
-async function dbEntriesWithPrefix(prefix) {
+async function dbGet(key) { return dbGetRaw(physicalStorageKey(key)); }
+async function dbPut(key, value) { return dbPutRaw(physicalStorageKey(key), value); }
+async function dbDelete(key) { return dbDeleteRaw(physicalStorageKey(key)); }
+async function dbGetForScope(key, scope) { return dbGetRaw(physicalStorageKeyFor(key, scope)); }
+async function dbPutForScope(key, value, scope) { return dbPutRaw(physicalStorageKeyFor(key, scope), value); }
+async function dbDeleteForScope(key, scope) { return dbDeleteRaw(physicalStorageKeyFor(key, scope)); }
+
+async function dbEntriesWithPrefixForScope(prefix, scope) {
+  const database = await openDatabase();
+  return new Promise((resolve, reject) => {
+    const result = [];
+    const physicalPrefix = physicalStorageKeyFor(prefix, scope);
+    const request = database.transaction("values").objectStore("values").openCursor();
+    request.onsuccess = () => { const cursor = request.result; if (!cursor) { resolve(result); return; } if (String(cursor.key).startsWith(physicalPrefix)) result.push([String(cursor.key).slice(scope.length), cursor.value]); cursor.continue(); };
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function deleteLocalChannelState(channelId, scope, draftKey = null) {
+  if (!scope || !channelId) return;
+  for (const prefix of ["key:", "legacy-key:"]) {
+    for (const [storageKey] of await dbEntriesWithPrefixForScope(prefix, scope)) {
+      if (storageKey.startsWith(`${prefix}${channelId}:`)) await dbDeleteForScope(storageKey, scope);
+    }
+  }
+  if (draftKey) await dbDeleteRaw(draftKey);
+}
+
+async function migrateLegacyStorage(state, scope) {
+  const marker = `${scope}migration-v1`;
+  if (await dbGetRaw(marker)) return;
+  const oldIdentity = await dbGetRaw("device") || await dbGetRaw("legacy-device");
+  let claimed = false;
+  if (oldIdentity?.id) {
+    const devices = Array.isArray(state?.devices) ? state.devices : [];
+    const matching = devices.find((device) => device?.id === oldIdentity.id && device?.user_id === state.user_id);
+    const ownNonAdminDevices = !state?.is_admin && devices.length > 0 && devices.every((device) => !device?.user_id || device.user_id === state.user_id);
+    claimed = Boolean(matching || (ownNonAdminDevices && devices.some((device) => device?.id === oldIdentity.id)));
+  }
+  if (claimed) {
+    await dbPutRaw(`${scope}device`, oldIdentity);
+    for (const [key, value] of await rawEntries()) {
+      if (key === "recovery-code" || key.startsWith("key:") || key.startsWith("legacy-key:")) await dbPutRaw(`${scope}${key}`, value);
+    }
+  }
+  await dbPutRaw(marker, {completed:true, claimed});
+}
+
+async function rawEntries() {
   const database = await openDatabase();
   return new Promise((resolve, reject) => {
     const result = [];
     const request = database.transaction("values").objectStore("values").openCursor();
-    request.onsuccess = () => { const cursor = request.result; if (!cursor) { resolve(result); return; } if (String(cursor.key).startsWith(prefix)) result.push([String(cursor.key), cursor.value]); cursor.continue(); };
+    request.onsuccess = () => { const cursor = request.result; if (!cursor) { resolve(result); return; } result.push([String(cursor.key), cursor.value]); cursor.continue(); };
     request.onerror = () => reject(request.error);
   });
 }
@@ -135,21 +222,21 @@ async function recoveryKeyFromCode(code, salt, iterations) {
   return crypto.subtle.deriveKey({name:"PBKDF2", salt, iterations, hash:"SHA-256"}, material, {name:"AES-GCM", length:256}, false, ["encrypt", "decrypt"]);
 }
 
-async function deviceIdentity() {
-  let identity = await dbGet("device");
+async function deviceIdentity(scope = activeStorageScope) {
+  let identity = await dbGetForScope("device", scope);
   if (identity) return identity;
   const keys = await crypto.subtle.generateKey({name:"ECDH", namedCurve:"P-256"}, true, ["deriveKey"]);
   identity = {id:crypto.randomUUID(), keys, publicKey:await crypto.subtle.exportKey("jwk", keys.publicKey), counter:0};
-  await dbPut("device", identity);
+  await dbPutForScope("device", identity, scope);
   return identity;
 }
 
-async function channelKey(channelId, epoch, create = false) {
+async function channelKey(channelId, epoch, create = false, scope = activeStorageScope) {
   const storageKey = `key:${channelId}:${epoch}`;
-  let key = await dbGet(storageKey);
+  let key = await dbGetForScope(storageKey, scope);
   if (!key && create) {
     key = await crypto.subtle.generateKey({name:"AES-GCM", length:256}, true, ["encrypt", "decrypt"]);
-    await dbPut(storageKey, key);
+    await dbPutForScope(storageKey, key, scope);
   }
   return key;
 }
@@ -159,8 +246,8 @@ async function channelKeyCommitment(key) {
   return b64(await crypto.subtle.digest("SHA-256", await crypto.subtle.exportKey("raw", key)));
 }
 
-async function wrapChannelKey(key, target) {
-  const identity = await deviceIdentity();
+async function wrapChannelKey(key, target, scope = activeStorageScope) {
+  const identity = await deviceIdentity(scope);
   const publicKey = await crypto.subtle.importKey("jwk", JSON.parse(target.public_key), {name:"ECDH", namedCurve:"P-256"}, false, []);
   const wrappingKey = await crypto.subtle.deriveKey({name:"ECDH", public:publicKey}, identity.keys.privateKey, {name:"AES-GCM", length:256}, false, ["encrypt"]);
   const nonce = crypto.getRandomValues(new Uint8Array(12));
@@ -168,31 +255,31 @@ async function wrapChannelKey(key, target) {
   return JSON.stringify({nonce:b64(nonce), ciphertext:b64(ciphertext), sender_public:identity.publicKey, sender_device_id:identity.id});
 }
 
-async function unwrapChannelKey(channelId, offer) {
-  const identity = await deviceIdentity();
+async function unwrapChannelKey(channelId, offer, scope = activeStorageScope) {
+  const identity = await deviceIdentity(scope);
   const wrapped = JSON.parse(offer.wrapped_key);
   const publicKey = await crypto.subtle.importKey("jwk", wrapped.sender_public, {name:"ECDH", namedCurve:"P-256"}, false, []);
   const wrappingKey = await crypto.subtle.deriveKey({name:"ECDH", public:publicKey}, identity.keys.privateKey, {name:"AES-GCM", length:256}, false, ["decrypt"]);
   const keyBytes = await crypto.subtle.decrypt({name:"AES-GCM", iv:raw(wrapped.nonce)}, wrappingKey, raw(wrapped.ciphertext));
   const key = await crypto.subtle.importKey("raw", keyBytes, {name:"AES-GCM"}, true, ["encrypt", "decrypt"]);
-  await dbPut(`key:${channelId}:${offer.key_id.split(":").pop()}`, key);
+  await dbPutForScope(`key:${channelId}:${offer.key_id.split(":").pop()}`, key, scope);
 }
 
-async function encryptMessage(channelId, epoch, text) {
-  const identity = await deviceIdentity();
-  const key = await channelKey(channelId, epoch, true);
+async function encryptMessage(channelId, epoch, text, scope = activeStorageScope) {
+  const identity = await deviceIdentity(scope);
+  const key = await channelKey(channelId, epoch, true, scope);
   const nonce = crypto.getRandomValues(new Uint8Array(12));
   const additionalData = encoder.encode(channelId);
   identity.counter += 1;
-  await dbPut("device", identity);
+  await dbPutForScope("device", identity, scope);
   const ciphertext = await crypto.subtle.encrypt({name:"AES-GCM", iv:nonce, additionalData}, key, encoder.encode(text));
   const commitment=await channelKeyCommitment(key);
   return {ciphertext:b64(ciphertext), envelope:{version:"ha-chat/1", device_id:identity.id, counter:identity.counter, nonce:b64(nonce), key_id:`${channelId}:${epoch}`, key_commitment:commitment, aad:b64(additionalData)}};
 }
 
-async function decryptMessage(message) {
+async function decryptMessage(message, scope = activeStorageScope) {
   const epoch = message.envelope.key_id.split(":").pop();
-  const keys=[await channelKey(message.channel_id, epoch),await dbGet(`legacy-key:${message.channel_id}:${epoch}`)].filter(Boolean);
+  const keys=[await channelKey(message.channel_id, epoch, false, scope),await dbGetForScope(`legacy-key:${message.channel_id}:${epoch}`, scope)].filter(Boolean);
   for (const key of keys) try {
     return decoder.decode(await crypto.subtle.decrypt({name:"AES-GCM", iv:raw(message.envelope.nonce), additionalData:raw(message.envelope.aad)}, key, raw(message.ciphertext)));
   } catch { /* Try the key retained from the previous storage layout. */ }
@@ -242,10 +329,10 @@ class HomeAssistantChatPanel extends HTMLElement {
     if (this._encryptionInitializing || this._disconnected || !this._coreReady || !this._hass) return;
     this._encryptionInitializing = true; this._encryptionError = ""; this.render();
     try {
-      const identity = await deviceIdentity();
+      const scope=this._storageScope || activeStorageScope; const identity = await deviceIdentity(scope);
       await this.ws({type:"home_assistant_chat/device/register", device_id:identity.id, public_key:JSON.stringify(identity.publicKey), label:this.text.device});
       await this.refreshState(); await this.claimOffers();
-      try { if (await dbGet("recovery-code")) await this.updateRecoveryBundle(); } catch { /* Optional recovery sync must never block the chat UI. */ }
+      try { if (await dbGetForScope("recovery-code",scope)) await this.updateRecoveryBundle(null,scope); } catch { /* Optional recovery sync must never block the chat UI. */ }
       await this.selectChannel(this._active);
       if (this._keySyncTimer) clearInterval(this._keySyncTimer); this._keySyncTimer = setInterval(() => this.syncKeyRequests().catch(() => {}), 10000);
       this._encryptionInitializing = false; this._encryptionRetryAttempt = 0; if (this._encryptionRetryTimer) { clearTimeout(this._encryptionRetryTimer); this._encryptionRetryTimer = null; }
@@ -273,18 +360,34 @@ class HomeAssistantChatPanel extends HTMLElement {
   teardownViewport() { if (!this._viewportHandler) return; window.removeEventListener("resize",this._viewportHandler); window.visualViewport?.removeEventListener("resize",this._viewportHandler); window.visualViewport?.removeEventListener("scroll",this._viewportHandler); this._viewportHandler=null; }
 
   async refreshState() {
-    this._state = await this.ws({type:"home_assistant_chat/state"});
+    this._state = await this.ws({type:"home_assistant_chat/state", ...(this._active ? {channel_id:this._active} : {})});
+    const previousScope = this._storageScope;
+    await configureStorageScope(this._state);
+    this._storageScope = activeStorageScope;
+    if (previousScope && previousScope !== this._storageScope) {
+      // A HA account/server switch must not retain plaintext, pending requests,
+      // or cached key-state from the previous scope in this panel instance.
+      this._plaintext = new Map(); this._draftValues = new Map(); this._keyRequests = new Set();
+      this._keyState = null; this._securityCode = null; this._recoveryFingerprint = null;
+    }
     this._channels = this._state.channels || []; this._messages = this._state.messages || [];
+    this._hasOlderMessages = Boolean(this._state.has_older_messages); this._oldestCursor = this._state.oldest_cursor || null;
+    this._keyStates = new Map(Object.entries(this._state.key_states || {}));
     if (!this._channels.some((channel) => channel.id === this._active)) this._active = this._channels[0]?.id || null;
     this._plaintext ||= new Map(); const liveIds=new Set(this._messages.map((message) => message.id));
     for (const id of this._plaintext.keys()) if (!liveIds.has(id)) this._plaintext.delete(id);
-    await Promise.all(this._messages.filter((message) => message.channel_id === this._active && !message.deleted && !this._plaintext.has(message.id)).map(async (message) => { const value=await decryptMessage(message); if (value !== null) this._plaintext.set(message.id,value); }));
+    const scope = this._storageScope;
+    await Promise.all(this._messages.filter((message) => message.channel_id === this._active && !message.deleted && !this._plaintext.has(message.id)).map(async (message) => { const value=await decryptMessage(message, scope); if (value !== null && this._storageScope === scope) this._plaintext.set(message.id,value); }));
     this.render();
   }
 
   async handleEvent(event) {
-    if (event.event === "key_request" && event.request?.channel_id) {
-      const channel = this._channels.find((item) => item.id === event.request.channel_id);
+    if (["channel_deleted", "private_deleted"].includes(event.event) && event.channel_id) {
+      await deleteLocalChannelState(event.channel_id, this._storageScope, this._state ? this.draftKey(event.channel_id) : null);
+      if (this._active === event.channel_id) this._active = null;
+    }
+    if (event.event === "key_request" && (event.channel_id || event.request?.channel_id)) {
+      const channel = this._channels.find((item) => item.id === (event.channel_id || event.request?.channel_id));
       if (channel) await this.shareKey(channel.id, channel.key_epoch || 1);
     }
     if (event.event === "key_offer") { const imported = await this.claimOffers(); if (imported) await this.updateRecoveryBundle(); }
@@ -293,20 +396,21 @@ class HomeAssistantChatPanel extends HTMLElement {
   }
 
   async claimOffers(states = null) {
-    const identity = await deviceIdentity();
+    const scope = this._storageScope || activeStorageScope; const identity = await deviceIdentity(scope);
     let imported = false;
     for (const channel of this._channels) {
       try {
-        const state = states?.get(channel.id) || await this.ws({type:"home_assistant_chat/key/state", channel_id:channel.id});
-        for (const group of Object.values(state.offers || {})) for (const offer of Object.values(group)) if (offer.device_id === identity.id) {
-          const epoch = offer.key_id.split(":").pop(); const storageKey=`key:${channel.id}:${epoch}`; const existing=await channelKey(channel.id,epoch); const expected=state.commitments?.[offer.key_id] || null;
+        const state = states?.get(channel.id) || this._keyStates?.get(channel.id) || await this.ws({type:"home_assistant_chat/key/state", channel_id:channel.id});
+        const offers = Array.isArray(state.offers) ? state.offers : Object.values(state.offers || {}).flatMap((group) => Object.values(group || {}));
+        for (const offer of offers) if (offer.device_id === identity.id) {
+          const epoch = offer.key_id.split(":").pop(); const storageKey=`key:${channel.id}:${epoch}`; const existing=await channelKey(channel.id,epoch,false,scope); const expected=state.commitments?.[offer.key_id] || null;
           if (expected && offer.key_commitment && offer.key_commitment !== expected) continue;
           if (existing && (!expected || await channelKeyCommitment(existing) === expected)) continue;
-          if (existing) await dbDelete(storageKey);
-          await unwrapChannelKey(channel.id, offer);
-          const importedKey=await channelKey(channel.id,epoch);
-          if (expected && await channelKeyCommitment(importedKey) !== expected) { await dbDelete(storageKey); continue; }
-          imported = true; this._keyRequests.delete(`${channel.id}:${epoch}`);
+          if (existing) await dbDeleteForScope(storageKey, scope);
+          await unwrapChannelKey(channel.id, offer, scope);
+          const importedKey=await channelKey(channel.id,epoch,false,scope);
+          if (expected && await channelKeyCommitment(importedKey) !== expected) { await dbDeleteForScope(storageKey, scope); continue; }
+          if (this._storageScope === scope) { imported = true; this._keyRequests.delete(`${channel.id}:${epoch}`); }
         }
       } catch { /* inaccessible channels are omitted */ }
     }
@@ -315,43 +419,59 @@ class HomeAssistantChatPanel extends HTMLElement {
 
   async syncKeyRequests() {
     if (this._disconnected || !this._coreReady) return;
-    const states=new Map();
-    for (const channel of this._channels) try { states.set(channel.id,await this.ws({type:"home_assistant_chat/key/state",channel_id:channel.id})); } catch { /* A stale channel must not stop synchronization. */ }
+    const scope=this._storageScope || activeStorageScope;
+    const response=await this.ws({type:"home_assistant_chat/key/states"});
+    const states=new Map((response.states || []).map((state) => [state.channel_id, state]));
+    this._keyStates=states;
     await this.claimOffers(states);
     for (const channel of this._channels) {
-      const epoch=channel.key_epoch || 1; const state=states.get(channel.id); if (!state) continue; const key=await channelKey(channel.id,epoch);
+      const epoch=channel.key_epoch || 1; const state=states.get(channel.id); if (!state) continue; const key=await channelKey(channel.id,epoch,false,scope);
       if (key && state.pending_requests?.length) await this.shareKey(channel.id,epoch);
       if (channel.id === this._active && !key && this._messages.some((message) => message.channel_id === channel.id)) { this._keyRequests.delete(`${channel.id}:${epoch}`); await this.updateKeyState(channel.id); }
     }
   }
 
-  async updateKeyState(channelId) {
+  async updateKeyState(channelId, fresh = false) {
     const channel = this._channels.find((item) => item.id === channelId); if (!channel) return;
     try {
-      const imported = await this.claimOffers(); if (imported) await this.updateRecoveryBundle(); this._keyState = await this.ws({type:"home_assistant_chat/key/state", channel_id:channelId});
-      const epoch=channel.key_epoch || 1; let key = await channelKey(channelId,epoch); const expected=this._keyState?.commitment || null;
-      if (key && expected && await channelKeyCommitment(key) !== expected) { await dbDelete(`key:${channelId}:${epoch}`); key=null; }
+      const scope=this._storageScope || activeStorageScope; const imported = await this.claimOffers(); if (imported) await this.updateRecoveryBundle(); this._keyState = fresh || !this._keyStates?.has(channelId) ? await this.ws({type:"home_assistant_chat/key/state", channel_id:channelId}) : this._keyStates.get(channelId);
+      const epoch=channel.key_epoch || 1; let key = await channelKey(channelId,epoch,false,scope); const expected=this._keyState?.commitment || null;
+      if (key && expected && await channelKeyCommitment(key) !== expected) { await dbDeleteForScope(`key:${channelId}:${epoch}`,scope); key=null; }
       this._securityCode = await keySecurityCode(key); const hasMessages = this._messages.some((message) => message.channel_id === channelId);
       this._waiting = !key && hasMessages;
       const requestKey = `${channelId}:${channel.key_epoch || 1}`;
-      if (this._waiting && !this._keyRequests.has(requestKey)) { this._keyRequests.add(requestKey); try { const identity = await deviceIdentity(); await this.ws({type:"home_assistant_chat/key/request", channel_id:channelId, device_id:identity.id}); } catch (error) { this._keyRequests.delete(requestKey); throw error; } }
+      if (this._waiting && !this._keyRequests.has(requestKey)) { this._keyRequests.add(requestKey); try { const identity = await deviceIdentity(scope); await this.ws({type:"home_assistant_chat/key/request", channel_id:channelId, device_id:identity.id}); } catch (error) { this._keyRequests.delete(requestKey); throw error; } }
     } catch { this._waiting = true; }
     this.render();
   }
 
+  async loadOlderMessages() {
+    if (!this._active || !this._hasOlderMessages || this._loadingOlder) return;
+    this._loadingOlder = true;
+    try {
+      const previousHeight = this.shadowRoot.querySelector(".messages")?.scrollHeight || 0;
+      const page = await this.ws({type:"home_assistant_chat/history", channel_id:this._active, before:this._oldestCursor});
+      const existing = new Set(this._messages.map((message) => message.id));
+      this._messages = [...(page.messages || []).filter((message) => !existing.has(message.id)), ...this._messages];
+      this._hasOlderMessages = Boolean(page.has_older_messages); this._oldestCursor = page.oldest_cursor || null; this.render();
+      requestAnimationFrame(() => { const messages=this.shadowRoot.querySelector(".messages"); if (messages) messages.scrollTop += messages.scrollHeight - previousHeight; });
+    } catch { this._error = this.text.unavailable; this.render(); }
+    finally { this._loadingOlder = false; }
+  }
+
   async selectChannel(channelId) {
-    this._active = channelId; this._error = ""; this._waiting = false; this.render(); await this.updateKeyState(channelId);
+    this._active = channelId; this._error = ""; this._waiting = false; this.render(); await this.refreshState(); await this.updateKeyState(channelId);
     const latest = this._messages.filter((message) => message.channel_id === channelId).at(-1);
     if (latest) this.ws({type:"home_assistant_chat/seen", channel_id:channelId, message_id:latest.id}).catch(() => {});
   }
 
   async shareKey(channelId, epoch) {
-    const key = await channelKey(channelId, epoch); if (!key) return;
+    const scope=this._storageScope || activeStorageScope; const key = await channelKey(channelId, epoch, false, scope); if (!key) return;
     try {
-      const identity = await deviceIdentity(); const commitment=await channelKeyCommitment(key);
+      const identity = await deviceIdentity(scope); const commitment=await channelKeyCommitment(key);
       for (const target of await this.ws({type:"home_assistant_chat/key/devices", channel_id:channelId})) {
         if (target.id === identity.id) continue;
-        try { await this.ws({type:"home_assistant_chat/key/offer", channel_id:channelId, device_id:target.id, key_id:`${channelId}:${epoch}`, key_commitment:commitment, wrapped_key:await wrapChannelKey(key, target)}); }
+        try { await this.ws({type:"home_assistant_chat/key/offer", channel_id:channelId, device_id:target.id, key_id:`${channelId}:${epoch}`, key_commitment:commitment, wrapped_key:await wrapChannelKey(key, target, scope)}); }
         catch { /* One stale device must not prevent sharing with the others. */ }
       }
     } catch { /* inaccessible channels are skipped */ }
@@ -361,9 +481,9 @@ class HomeAssistantChatPanel extends HTMLElement {
     if (!channel) return;
     this.confirmDialog(this.text.confirmResetKey, this.text.resetKey, async () => {
       try {
-        const identity=await deviceIdentity();
+        const scope=this._storageScope || activeStorageScope; const identity=await deviceIdentity(scope);
         const result=await this.ws({type:"home_assistant_chat/key/reset",channel_id:channel.id,device_id:identity.id,expected_epoch:channel.key_epoch || 1});
-        const key=await channelKey(channel.id,result.key_epoch,true);
+        const key=await channelKey(channel.id,result.key_epoch,true,scope);
         this._keyRequests.delete(`${channel.id}:${channel.key_epoch || 1}`); await this.refreshState(); await this.shareKey(channel.id,result.key_epoch); await this.updateRecoveryBundle(); this._securityCode=await keySecurityCode(key); this._waiting=false; this.render();
       } catch { this._error = this.text.resetError; this.render(); }
     });
@@ -397,10 +517,11 @@ class HomeAssistantChatPanel extends HTMLElement {
     event.preventDefault(); const input = this.shadowRoot.querySelector("#message-input"); const channel = this._channels.find((item) => item.id === this._active);
     const value = input.value.trim(); if (!channel || !value || this.cannotPost(channel)) return; const epoch = channel.key_epoch || 1;
     try {
-      const state=await this.ws({type:"home_assistant_chat/key/state",channel_id:channel.id}); let localKey=await channelKey(channel.id,epoch);
-      if (localKey && state.commitment && await channelKeyCommitment(localKey) !== state.commitment) { await dbDelete(`key:${channel.id}:${epoch}`); localKey=null; }
-      if (!localKey && this._messages.some((message) => message.channel_id === channel.id)) { this._waiting = true; await this.updateKeyState(channel.id); return; }
-      const encrypted = await encryptMessage(channel.id, epoch, value);
+      const scope=this._storageScope || activeStorageScope; const state=await this.ws({type:"home_assistant_chat/key/state",channel_id:channel.id}); let localKey=await channelKey(channel.id,epoch,false,scope);
+      if (localKey && state.commitment && await channelKeyCommitment(localKey) !== state.commitment) { await dbDeleteForScope(`key:${channel.id}:${epoch}`,scope); localKey=null; }
+      if (!localKey && this._messages.some((message) => message.channel_id === channel.id)) { this._waiting = true; await this.updateKeyState(channel.id,true); return; }
+      const encrypted = await encryptMessage(channel.id, epoch, value, scope);
+      if (this._storageScope !== scope) return;
       const sent=await this.ws({type:"home_assistant_chat/send", channel_id:channel.id, ...encrypted}); if (sent?.message?.id) { this._plaintext ||= new Map(); this._plaintext.set(sent.message.id,value); } await this.shareKey(channel.id, epoch); await this.updateRecoveryBundle(); this._draftValues?.delete(this.draftKey(channel.id)); await dbDelete(this.draftKey(channel.id)); const currentInput=this.shadowRoot.querySelector("#message-input"); if (currentInput) currentInput.value="";
     } catch (error) { if (String(error?.code || error?.message).includes("key_commitment_conflict")) { await this.refreshState(); this._waiting=true; await this.updateKeyState(channel.id); } else { this._error = this.text.unavailable; this.render(); } }
   }
@@ -458,19 +579,20 @@ class HomeAssistantChatPanel extends HTMLElement {
   }
 
   async createRecoveryCode() {
-    let code = await dbGet("recovery-code");
-    if (!code) { code = base64Url(crypto.getRandomValues(new Uint8Array(32))); await dbPut("recovery-code", code); this._recoveryFingerprint = null; }
-    await this.updateRecoveryBundle(code);
+    const scope=this._storageScope || activeStorageScope; let code = await dbGetForScope("recovery-code",scope);
+    if (!code) { code = base64Url(crypto.getRandomValues(new Uint8Array(32))); await dbPutForScope("recovery-code", code, scope); this._recoveryFingerprint = null; }
+    await this.updateRecoveryBundle(code, scope);
     return code;
   }
 
-  async updateRecoveryBundle(code = null) {
+  async updateRecoveryBundle(code = null, scopeOverride = null) {
     if (this._recoveryUpdating) return;
-    code = code || await dbGet("recovery-code"); if (!code) return;
+    const scope=scopeOverride || this._storageScope || activeStorageScope;
+    code = code || await dbGetForScope("recovery-code",scope); if (!code) return;
     this._recoveryUpdating = true;
     try {
       const entries = [];
-      for (const [storageKey, key] of await dbEntriesWithPrefix("key:")) {
+      for (const [storageKey, key] of await dbEntriesWithPrefixForScope("key:", scope)) {
         try { entries.push({key_id:storageKey.slice(4), raw:base64Url(await crypto.subtle.exportKey("raw", key))}); } catch { /* non-exportable legacy keys are omitted */ }
       }
       entries.sort((a, b) => a.key_id.localeCompare(b.key_id));
@@ -487,6 +609,7 @@ class HomeAssistantChatPanel extends HTMLElement {
   }
 
   async restoreRecovery(code) {
+    const scope=this._storageScope || activeStorageScope;
     if (!/^[A-Za-z0-9_-]{43}$/.test(String(code || ""))) throw new Error("recovery_invalid");
     const bundle = await this.ws({type:"home_assistant_chat/recovery/get"});
     if (!bundle) throw new Error("recovery_missing");
@@ -502,9 +625,9 @@ class HomeAssistantChatPanel extends HTMLElement {
       let keyBytes; try { keyBytes = fromBase64Url(item.raw); } catch { throw new Error("recovery_invalid"); }
       if (keyBytes.length !== 32) throw new Error("recovery_invalid");
       const key = await crypto.subtle.importKey("raw", keyBytes, {name:"AES-GCM"}, true, ["encrypt", "decrypt"]);
-      await dbPut(`key:${item.key_id}`, key);
+      await dbPutForScope(`key:${item.key_id}`, key, scope);
     }
-    await dbPut("recovery-code", code);
+    await dbPutForScope("recovery-code", code, scope);
     this._recoveryFingerprint = null; await this.refreshState(); await this.claimOffers(); if (this._active) await this.updateKeyState(this._active);
   }
 
@@ -665,7 +788,7 @@ class HomeAssistantChatPanel extends HTMLElement {
     this.shadowRoot.innerHTML = `<style>:host{display:block;height:100dvh;min-height:0;overflow:hidden;background:var(--primary-background-color,#11151b);color:var(--primary-text-color,#e7e9ed);font:14px system-ui}*{box-sizing:border-box}main{--chat-header-height:104px;height:100%;min-height:0;display:grid;grid-template-columns:250px minmax(0,1fr);max-width:1200px;margin:auto}.side{min-height:0;border-right:1px solid var(--divider-color,#2d3540);overflow:auto}.side-top{height:var(--chat-header-height);padding:14px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid var(--divider-color,#2d3540)}.side-top h2{margin:0}.side-top .button{display:grid;place-items:center;width:34px;height:34px;padding:0;font-size:20px;line-height:1}.channel-list{padding:14px 12px}.channel-row{display:flex;align-items:center}.channel-row .channel{flex:1;min-width:0}.channel{display:block;width:100%;text-align:left;background:none;border:0;color:inherit;padding:10px;border-radius:8px;cursor:pointer}.active{background:var(--secondary-background-color,#2d3748)}.content{display:flex;flex-direction:column;min-width:0;min-height:0}.top{height:var(--chat-header-height);padding:14px 18px;border-bottom:1px solid var(--divider-color,#2d3540)}.topline,.header-actions,.chat-heading,.message-head,.row,.actions{display:flex;align-items:center;gap:8px}.topline,.message-head,.row{justify-content:space-between}.header-actions{justify-content:flex-end;flex-wrap:wrap}.top h3{margin:.25rem 0}.private-menu{position:relative}.private-menu summary{display:grid;place-items:center;width:34px;height:34px;border-radius:8px;cursor:pointer;list-style:none}.private-menu summary::-webkit-details-marker{display:none}.private-menu summary:hover{background:var(--secondary-background-color,#2d3748)}.private-menu-popover{position:absolute;top:38px;left:0;z-index:10;display:grid;min-width:190px;padding:6px;border:1px solid var(--divider-color,#465365);border-radius:10px;background:var(--card-background-color,#202a36);box-shadow:0 8px 24px #0007}.sidebar-private-menu .private-menu-popover{left:auto;right:0}.private-menu-popover .button{border:0;text-align:left;background:transparent}.peer-avatar{display:inline-grid;place-items:center;width:34px;height:34px;border-radius:50%;background:var(--accent-color,#03a9f4);color:#fff;font-weight:700}.security{margin:.35rem 0 0;color:var(--success-color,#58c28b);font-size:.85rem}.messages{flex:1;min-height:0;overflow:auto;padding:18px}.message{padding:10px;margin:7px 0;background:var(--card-background-color,#202a36);border-radius:10px;max-width:78%;overflow-wrap:anywhere}.message.deleted{opacity:.7;font-style:italic}.message-head{align-items:flex-start;margin-bottom:4px}.message-head small{min-width:0;padding-top:4px}.mine{margin-left:auto;background:#194e5c}.compose{display:flex;flex:0 0 auto;gap:8px;padding:12px;border-top:1px solid var(--divider-color,#2d3540)}.compose input{flex:1;min-width:0}.button,input,select{border:1px solid var(--divider-color,#465365);border-radius:8px;background:var(--card-background-color,#1b232d);color:inherit;padding:9px}.button{cursor:pointer}.button.delete-message{display:grid;place-items:center;flex:0 0 28px;width:28px;height:28px;padding:0;border:0;background:transparent}.button.delete-message:hover{background:color-mix(in srgb,var(--error-color,#ffb4ab) 12%,transparent)}.delete-message ha-icon{--mdc-icon-size:18px}.button:disabled,input:disabled{opacity:.55;cursor:not-allowed}.danger{color:var(--error-color,#ffb4ab)}.modal{position:fixed;inset:0;z-index:20;background:#0009;display:grid;place-items:center;padding:20px}.dialog{width:min(700px,100%);max-height:90vh;overflow:auto;background:var(--card-background-color,#202a36);border:1px solid var(--divider-color,#4a5868);border-radius:14px;padding:20px}.actions{justify-content:flex-end;margin-top:16px}.tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:14px}.tabs button{background:var(--secondary-background-color,#2d3748);color:inherit;border:0;border-radius:7px;padding:8px;cursor:pointer}.row{padding:8px;border-bottom:1px solid var(--divider-color,#35404d)}label{display:grid;gap:5px;margin:.6rem 0}select[multiple]{min-height:9rem}@media(max-width:700px){main{--chat-header-height:auto;grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}.side{border-right:0}.side-top{height:auto}.channel-list{display:flex;gap:4px;overflow:auto;border-bottom:1px solid var(--divider-color,#2d3540)}.channel-row{flex:0 0 auto}.channel{white-space:nowrap;width:auto}.top{height:auto}.message{max-width:92%}.topline{align-items:flex-start;flex-direction:column}.header-actions{justify-content:flex-start}}</style><main>
       <aside class="side"><div class="side-top"><h2>${text.chat}</h2><button class="button" id="new-private" aria-label="${esc(text.private)}" title="${esc(text.private)}">+</button></div><div class="channel-list">${channels.map((channel) => `<div class="channel-row"><button class="channel ${channel.id === this._active ? "active" : ""}" data-channel="${esc(channel.id)}">${esc(this.channelName(channel))}</button>${this.privateMenu(channel,"sidebar")}</div>`).join("")}</div></aside>
       <section class="content"><header class="top"><div class="topline"><div class="chat-heading">${current?.kind === "private" && peer ? `<span class="peer-avatar">${esc(initials(peer.name))}</span><h3>${esc(peer.name)}</h3>${this.privateMenu(current)}` : `<h3>${esc(this.channelName(current))}</h3>`}</div><div class="header-actions">${(this._state?.is_admin ?? this._hass?.user?.is_admin) ? `<button class="button" id="admin">${text.admin}</button>` : `<button class="button" id="user-settings">${text.settings}</button>`}</div></div>${security}</header>
-      <div class="messages">${this._waiting ? `<p>${text.waiting} <button class="button" id="reset-key">${text.resetKey}</button></p>` : ""}${this._error ? `<p>${esc(this._error)}</p>` : ""}${this._encryptionError ? `<p>${esc(this._encryptionError)}</p>` : ""}${messages.length ? messages.map((message) => `<article class="message ${message.sender_id === this._state?.user_id ? "mine" : ""} ${message.deleted ? "deleted" : ""}" data-message="${esc(message.id)}"><div class="message-head"><small>${esc(message.sender_name || "User")} · ${new Date(message.created * 1000).toLocaleString(this.language === "de" ? "de-DE" : "en-US")}</small>${!message.deleted && message.sender_id === this._state?.user_id ? `<button class="button danger delete-message" data-id="${esc(message.id)}" aria-label="${esc(text.delete)}" title="${esc(text.delete)}"><ha-icon icon="mdi:delete-outline" aria-hidden="true"></ha-icon></button>` : ""}</div><span class="body">${message.deleted ? text.messageDeleted : this._plaintext?.has(message.id) ? esc(this._plaintext.get(message.id)) : text.encrypted}</span></article>`).join("") : `<p>${text.noMessages}</p>`}</div>
+      <div class="messages">${this._hasOlderMessages ? `<button class="button load-older" type="button">${text.loadOlder}</button>` : ""}${this._waiting ? `<p>${text.waiting} <button class="button" id="reset-key">${text.resetKey}</button></p>` : ""}${this._error ? `<p>${esc(this._error)}</p>` : ""}${this._encryptionError ? `<p>${esc(this._encryptionError)}</p>` : ""}${messages.length ? messages.map((message) => `<article class="message ${message.sender_id === this._state?.user_id ? "mine" : ""} ${message.deleted ? "deleted" : ""}" data-message="${esc(message.id)}"><div class="message-head"><small>${esc(message.sender_name || "User")} · ${new Date(message.created * 1000).toLocaleString(this.language === "de" ? "de-DE" : "en-US")}</small>${!message.deleted && message.sender_id === this._state?.user_id ? `<button class="button danger delete-message" data-id="${esc(message.id)}" aria-label="${esc(text.delete)}" title="${esc(text.delete)}"><ha-icon icon="mdi:delete-outline" aria-hidden="true"></ha-icon></button>` : ""}</div><span class="body">${message.deleted ? text.messageDeleted : this._plaintext?.has(message.id) ? esc(this._plaintext.get(message.id)) : text.encrypted}</span></article>`).join("") : `<p>${text.noMessages}</p>`}</div>
       <form class="compose"><input id="message-input" maxlength="4000" autocomplete="off" placeholder="${esc(readOnly ? text.cannotPost : text.write)}" ${readOnly ? "disabled" : ""}><button class="button" ${readOnly ? "disabled" : ""}>${text.send}</button></form></section></main>`;
     if (!this.shadowRoot.querySelector("#responsive-chat-style")) { const style=document.createElement("style"); style.id="responsive-chat-style"; style.textContent="@media (max-width:700px){:host{height:100dvh;overflow:hidden}main{width:100%;height:100dvh;grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr);overflow:hidden}.side{display:grid;grid-template-columns:52px minmax(0,1fr);align-items:center;min-width:0;overflow:hidden;border-right:0;border-bottom:1px solid var(--divider-color,#2d3540);background:var(--card-background-color,#151b22)}.side-top{height:auto;padding:6px;border:0}.side-top h2{display:none}.side-top .button{width:44px;height:44px}.channel-list{display:flex;gap:4px;padding:6px 8px;overflow-x:auto;overscroll-behavior-x:contain;border:0;scrollbar-width:none}.channel-list::-webkit-scrollbar{display:none}.channel-row{flex:0 0 auto}.channel{width:auto;white-space:nowrap;padding:10px 12px}.content{min-height:0;overflow:hidden}.top{height:auto;min-height:56px;padding:8px 10px}.topline{flex-direction:row;align-items:center;gap:6px}.chat-heading{min-width:0}.chat-heading h3{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.header-actions{flex-wrap:nowrap;margin-left:auto}.header-actions .button{padding:8px}.security{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.messages{padding:10px;overscroll-behavior:contain}.message{max-width:94%;padding:8px 10px;margin:5px 0}.compose{position:relative;z-index:2;padding:8px 8px calc(8px + env(safe-area-inset-bottom));min-height:60px;background:var(--primary-background-color,#11151b)}.compose input,.compose .button{min-height:44px;font-size:16px}.modal{padding:0;overflow:hidden;place-items:end stretch}.dialog{width:100%;max-height:calc(100dvh - 16px);margin:0;padding:16px;border-radius:16px 16px 0 0;overflow:auto}.private-menu-popover{position:fixed;top:auto;right:8px;bottom:calc(68px + env(safe-area-inset-bottom));left:8px;max-width:none}}"; this.shadowRoot.append(style); }
     if (!this.shadowRoot.querySelector("#viewport-chat-style")) { const style=document.createElement("style"); style.id="viewport-chat-style"; style.textContent="@media(max-width:700px){:host{box-sizing:border-box;height:var(--ha-chat-vh,100dvh);padding-top:env(safe-area-inset-top)}main{height:100%}.dialog{max-height:calc(var(--ha-chat-vh,100dvh) - env(safe-area-inset-top) - 16px)}}"; this.shadowRoot.append(style); }
@@ -673,6 +796,7 @@ class HomeAssistantChatPanel extends HTMLElement {
     this.shadowRoot.querySelector(".compose")?.addEventListener("submit", (event) => this.sendMessage(event));
     this.shadowRoot.querySelector("#message-input")?.addEventListener("input", (event) => this.queueDraftSave(this._active, event.target.value));
     this.shadowRoot.querySelector("#message-input")?.addEventListener("focus", (event) => { this.updateViewportHeight(); requestAnimationFrame(() => event.target.scrollIntoView({block:"nearest",inline:"nearest"})); });
+    this.shadowRoot.querySelector(".load-older")?.addEventListener("click", () => this.loadOlderMessages());
     this.restoreDraft(this._active);
     this.shadowRoot.querySelector("#reset-key")?.addEventListener("click", () => this.resetEncryption(current));
     this.shadowRoot.querySelector("#new-private")?.addEventListener("click", () => this.privateDialog()); this.shadowRoot.querySelector("#admin")?.addEventListener("click", () => this.adminDialog()); this.shadowRoot.querySelector("#user-settings")?.addEventListener("click", () => this.userSettingsDialog());
@@ -681,7 +805,8 @@ class HomeAssistantChatPanel extends HTMLElement {
     this.shadowRoot.querySelectorAll(".silence-private").forEach((button) => button.addEventListener("click", () => this.togglePrivateSilence(privateChannelFor(button))));
     this.shadowRoot.querySelectorAll(".block-private").forEach((button) => button.addEventListener("click", () => this.blockPrivate(privateChannelFor(button))));
     this.shadowRoot.querySelectorAll(".delete-private").forEach((button) => button.addEventListener("click", () => this.deletePrivate(privateChannelFor(button))));
-    this.shadowRoot.querySelectorAll("[data-message]:not(.deleted)").forEach(async (element) => { const message = messages.find((item) => item.id === element.dataset.message); if (this._plaintext?.has(message.id)) return; const value=await decryptMessage(message); if (value !== null) { this._plaintext ||= new Map(); this._plaintext.set(message.id,value); element.querySelector(".body").textContent=value; } });
+    const renderScope=this._storageScope;
+    this.shadowRoot.querySelectorAll("[data-message]:not(.deleted)").forEach(async (element) => { const message = messages.find((item) => item.id === element.dataset.message); if (!message || this._plaintext?.has(message.id)) return; const value=await decryptMessage(message,renderScope); if (value !== null && this._storageScope === renderScope) { this._plaintext ||= new Map(); this._plaintext.set(message.id,value); element.querySelector(".body").textContent=value; } });
     this.shadowRoot.querySelectorAll(".delete-message").forEach((button) => button.addEventListener("click", () => this.confirmDialog(text.confirmMessageDelete, text.delete, async () => { await this.ws({type:"home_assistant_chat/message/delete", message_id:button.dataset.id}); await this.refreshState(); })));
     const nextMessages=this.shadowRoot.querySelector(".messages"); if (nextMessages && priorScroll) requestAnimationFrame(() => { nextMessages.scrollTop=priorScroll.atBottom ? nextMessages.scrollHeight : priorScroll.top; }); const nextInput=this.shadowRoot.querySelector("#message-input"); if (nextInput && priorInput && !nextInput.disabled) { nextInput.focus({preventScroll:true}); nextInput.setSelectionRange(priorInput.start,priorInput.end); }
   }

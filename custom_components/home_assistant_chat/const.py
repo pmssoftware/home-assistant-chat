@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 DOMAIN = "home_assistant_chat"
 PANEL_URL = "home-assistant-chat"
@@ -17,6 +16,5 @@ class ChatConfig:
     enabled: bool = True
     allow_users: bool = True
     retention_days: int = 0
-    encryption_enabled: bool = True
     show_security_details: bool = False
     show_deleted_messages: bool = True

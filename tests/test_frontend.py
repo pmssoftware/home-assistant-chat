@@ -23,9 +23,28 @@ def test_browser_key_store_migrates_legacy_identity_and_channel_keys():
     assert 'key.startsWith("channel:")' in source
     assert 'legacy:`legacy-key:${suffix}`' in source
     assert 'existingRequest.result === undefined ? migrated.primary : migrated.legacy' in source
-    assert 'await dbGet(`legacy-key:${message.channel_id}:${epoch}`)' in source
+    assert 'await dbGetForScope(`legacy-key:${message.channel_id}:${epoch}`, scope)' in source
     assert 'objectStoreNames.contains("v")' in source
     assert 'migrateStorage(transaction,"values",target)' in source
+
+def test_browser_crypto_storage_is_namespaced_by_server_and_user():
+    source = JS.read_text()
+    assert 'function storageScopeFor(state)' in source
+    assert 'state?.server_id || state?.serverId || "local"' in source
+    assert 'state?.user_id || ""' in source
+    assert 'await configureStorageScope(this._state)' in source
+    assert 'physicalStorageKey(key)' in source
+    assert 'scope:${base64Url(encoder.encode(`${server}\\u0000${user}`))}:' in source
+    assert 'async function migrateLegacyStorage(state, scope)' in source
+    assert 'migration-v1' in source
+    assert 'device?.id === oldIdentity.id && device?.user_id === state.user_id' in source
+    assert 'key === "recovery-code" || key.startsWith("key:") || key.startsWith("legacy-key:")' in source
+
+def test_account_switch_clears_cached_crypto_and_plaintext_state():
+    source = JS.read_text()
+    assert 'const previousScope = this._storageScope' in source
+    assert 'this._plaintext = new Map(); this._draftValues = new Map(); this._keyRequests = new Set()' in source
+    assert 'this._keyState = null; this._securityCode = null; this._recoveryFingerprint = null' in source
 
 def test_unrecoverable_keys_have_an_explicit_new_key_fallback():
     source=JS.read_text()
@@ -34,7 +53,7 @@ def test_unrecoverable_keys_have_an_explicit_new_key_fallback():
     assert 'resetKey:"Start with a new key"' in source
     assert 'resetKey:"Mit neuem Schlüssel fortfahren"' in source
     assert 'device_id:identity.id,expected_epoch:channel.key_epoch || 1' in source
-    assert 'await channelKey(channel.id,result.key_epoch,true)' in source
+    assert 'await channelKey(channel.id,result.key_epoch,true,scope)' in source
 
 def test_conflicting_same_epoch_keys_are_discarded_and_recovered():
     source = JS.read_text()
@@ -44,7 +63,7 @@ def test_conflicting_same_epoch_keys_are_discarded_and_recovered():
     assert 'offer.key_commitment !== expected' in source
     assert 'key_commitment:commitment' in source
     assert 'await channelKeyCommitment(existing) === expected' in source
-    assert 'await dbDelete(`key:${channelId}:${epoch}`)' in source
+    assert 'await dbDeleteForScope(`key:${channelId}:${epoch}`,scope)' in source
     assert 'key_commitment_conflict' in source
 
 def test_admin_bindings_and_csp_safe_markup():
@@ -164,14 +183,14 @@ def test_identity_is_visible_copyable_and_peer_uuid_is_not_contact_identifier():
 
 def test_recovery_bundle_is_client_side_pbkdf2_aes_gcm_and_idb_backed():
     source = JS.read_text()
-    assert 'dbEntriesWithPrefix(prefix)' in source
+    assert 'dbEntriesWithPrefixForScope(prefix, scope)' in source
     assert 'new Uint8Array(32)' in source and 'base64Url' in source
     assert 'PBKDF2' in source and 'SHA-256' in source
     assert 'iterations = 210000' in source
     assert 'crypto.subtle.encrypt({name:"AES-GCM", iv:nonce}' in source
     assert 'home_assistant_chat/recovery/set' in source
     assert 'home_assistant_chat/recovery/get' in source
-    assert 'await dbPut("recovery-code", code)' in source
+    assert 'await dbPutForScope("recovery-code", code, scope)' in source
     assert 'this._recoveryUpdating' in source
     assert 'crypto.subtle.exportKey("raw", key)' in source
     assert 'crypto.subtle.importKey("raw", keyBytes' in source
@@ -286,6 +305,22 @@ def test_periodic_key_request_sync_covers_missed_events():
     assert 'setInterval(() => this.syncKeyRequests().catch(() => {}), 10000)' in source
     assert 'pending_requests?.length' in source
     assert 'this._keyRequests.delete(`${channel.id}:${epoch}`)' in source
+
+def test_frontend_uses_bounded_history_and_local_channel_cleanup():
+    source = JS.read_text()
+    assert 'home_assistant_chat/history' in source
+    assert 'has_older_messages' in source and 'oldest_cursor' in source
+    assert 'loadOlderMessages()' in source
+    assert 'deleteLocalChannelState(event.channel_id' in source
+    assert 'event.channel_id || event.request?.channel_id' in source
+
+def test_frontend_consumes_batched_key_states():
+    source = JS.read_text()
+    assert 'new Map(Object.entries(this._state.key_states || {}))' in source
+    assert 'this._keyStates?.get(channel.id)' in source
+    assert 'home_assistant_chat/key/states' in source
+    assert 'const states=new Map((response.states || [])' in source
+    assert 'this._keyStates=states' in source
 
 def test_render_preserves_composer_focus_and_message_scroll():
     source = JS.read_text()

@@ -13,7 +13,7 @@ Home Assistant Chat is a local custom integration with a native sidebar panel.
 It runs inside Home Assistant and does not require a separate add-on or chat
 server for local use.
 
-Current experimental version: **0.3.6**
+Current experimental version: **0.4.0**
 
 ## Installation
 
@@ -39,23 +39,22 @@ Choose **Integration** as its category.
 - User blocking and personal chat muting
 - Message and entire private-chat deletion
 - English and German interface
-- Experimental browser-side message encryption
+- Experimental browser-side message encryption (mandatory in this prototype)
 - Stable eight-digit local contact identities
 - Local QR display and camera/image scanning for contact identities
 - Client-encrypted recovery codes for restoring channel keys on a new device
 - Administrator controls for access, channels, moderation and devices
 
-Encryption remains experimental. Browser Web Crypto and IndexedDB hold device
-private keys while Home Assistant stores ciphertext and routing metadata. This
-prototype does not yet provide verified identity, forward secrecy,
-post-compromise security or standards-compliant MLS.
+Encryption remains experimental. It is not equivalent to WhatsApp or a
+security-audited end-to-end encrypted messenger.
 
 ## Roadmap
 
 1. Stabilize local messaging, encryption recovery and device handling.
 2. Add verified device linking and signed device certificates.
-3. Add federation using addresses such as `number@server-address` over a
-   dedicated chat port.
+3. Add federation using addresses such as `number@server-address`. Separate
+   backend ports for local clients and federation are planned, but are not
+   implemented yet.
 4. Add reliable delivery, federation security and server administration.
 5. After federation works, investigate optional MeshCore fallback messaging
    when the normal internet or VPN connection is unavailable.
@@ -63,6 +62,25 @@ post-compromise security or standards-compliant MLS.
 
 MeshCore would require compatible hardware at participating endpoints and must
 never silently weaken identity, authorization or encryption guarantees.
+
+## Security and threat model
+
+Message content is encrypted in the browser before it is sent. Home Assistant
+stores ciphertext, recovery ciphertext, and the routing data needed to deliver
+keys and messages. The Home Assistant server is trusted for account
+membership, identities, metadata, and key routing; this prototype is not
+resistant to a malicious or compromised server, a malicious custom frontend,
+same-origin code, a browser extension, or a compromised device.
+
+Participants, timing, device IDs, channel IDs, and other metadata remain
+visible to the server. Browser keys are extractable so that recovery and device
+sharing can work, and local drafts are stored as plaintext in browser
+IndexedDB. A recovery code protects an encrypted recovery bundle; browser key
+storage and recovery data are scoped to the Home Assistant server and user.
+Deleted ciphertext cannot be guaranteed to disappear from backups.
+
+This software is experimental and unaudited. Do not rely on it for high-risk
+secrets or safety-critical communication.
 
 ## Compatibility
 

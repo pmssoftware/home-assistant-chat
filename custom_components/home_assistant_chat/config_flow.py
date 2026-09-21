@@ -17,7 +17,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required("enabled", default=True): bool,
                 vol.Required("allow_users", default=True): bool,
                 vol.Optional("retention_days", default=0): vol.All(int, vol.Range(min=0, max=3650)),
-                vol.Required("encryption_enabled", default=True): bool,
                 vol.Required("show_security_details", default=False): bool,
                 vol.Required("show_deleted_messages", default=True): bool,
             }),
