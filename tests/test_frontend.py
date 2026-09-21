@@ -300,6 +300,14 @@ def test_mobile_layout_uses_safe_area_dvh_and_horizontal_channels():
     assert 'env(safe-area-inset-bottom)' in source
     assert 'overflow-x:auto' in source
 
+def test_ios_visual_viewport_lifecycle_and_composer_visibility():
+    source = JS.read_text()
+    assert 'window.visualViewport' in source
+    assert 'addEventListener("scroll",this._viewportHandler' in source
+    assert 'removeEventListener("scroll",this._viewportHandler' in source
+    assert 'safe-area-inset-top' in source
+    assert 'scrollIntoView({block:"nearest"' in source
+
 def test_decrypted_plaintext_is_cached_to_prevent_placeholder_layout_jumps():
     source = JS.read_text()
     assert 'this._plaintext ||= new Map()' in source
