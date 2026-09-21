@@ -272,3 +272,17 @@ def test_deleted_message_markers_are_localized_and_admin_configurable():
     assert 'show_deleted_messages:content.querySelector("#setting-deleted-markers").checked' in source
     assert '!message.deleted && message.sender_id === this._state?.user_id' in source
     assert '[data-message]:not(.deleted)' in source
+
+def test_message_drafts_are_local_per_server_user_and_channel():
+    source = JS.read_text()
+    assert 'draft:${this._state?.server_id' in source
+    assert 'this._draftValues.set(key,value)' in source
+    assert 'value ? dbPut(key,value) : dbDelete(key)' in source
+    assert 'addEventListener("input"' in source
+    assert 'await dbDelete(this.draftKey(channel.id))' in source
+
+def test_periodic_key_request_sync_covers_missed_events():
+    source = JS.read_text()
+    assert 'setInterval(() => this.syncKeyRequests().catch(() => {}), 10000)' in source
+    assert 'pending_requests?.length' in source
+    assert 'this._keyRequests.delete(`${channel.id}:${epoch}`)' in source

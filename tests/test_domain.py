@@ -48,6 +48,12 @@ def test_recovery_bundle_is_opaque_isolated_validated_and_migrated():
     except ValueError as err: assert str(err) == "invalid_recovery_bundle"
     else: assert False
 
+def test_key_requests_deduplicate_and_are_cleared_by_target_offer():
+    d=ChatDomain.fresh(); d.register_device("admin","device-a","pub-a"); d.register_device("admin","device-b","pub-b")
+    first=d.request_key("admin","public","device-a"); assert d.request_key("admin","public","device-a")["id"] == first["id"]
+    wrapped='{"sender_device_id":"device-b"}'
+    d.offer_key("admin","public","device-a","public:1",wrapped,set())
+    assert not d.data["key_requests"]
 def test_numeric_identities_are_stable_unique_and_parse_federated_syntax():
     d=ChatDomain.fresh("server"); first=d.ensure_identity("alice"); assert d.ensure_identity("alice")==first
     second=d.ensure_identity("bob"); assert second != first and d.data["identity_users"][str(first)] == "alice"

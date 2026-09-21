@@ -288,6 +288,7 @@ class ChatDomain:
         except (TypeError,ValueError) as err: raise ValueError("invalid_key_offer") from err
         if wrapped.get("sender_device_id") not in self.data["devices"].get(actor,{}): raise ValueError("invalid_key_offer")
         self.data["keys"].setdefault(channel_id,{}).setdefault(key_id,{})[device_id] = {"device_id":device_id,"wrapped_key":wrapped_key,"key_commitment":key_commitment,"from_device":actor,"from_device_id":wrapped["sender_device_id"]}
+        for request_id in [rid for rid, request in self.data["key_requests"].items() if request.get("channel_id")==channel_id and request.get("device_id")==device_id]: self.data["key_requests"].pop(request_id,None)
     def key_state(self, user_id: str, channel_id: str, admins: set[str] | None = None) -> dict[str, Any]:
         if not self.can_view(channel_id, user_id, admins or set()): raise PermissionError("channel_access")
         devices = self.data["devices"].get(user_id,{})
@@ -298,7 +299,8 @@ class ChatDomain:
         device_count = sum(len(self.data["devices"].get(uid, {})) for uid in participant_ids)
         key_id=f"{channel_id}:{channel.get('key_epoch',1)}"
         commitments=dict(self.data.get("key_commitments",{}).get(channel_id,{}))
-        return {"state":"ready" if available else "waiting_for_device","device_count":device_count,"commitment":commitments.get(key_id),"commitments":commitments,"offers":{offer_key_id:{device_id:{**offer,"key_id":offer_key_id} for device_id,offer in group.items() if device_id in own_ids} for offer_key_id,group in offers.items()}}
+        pending=[request for request in self.data["key_requests"].values() if request.get("channel_id")==channel_id]
+        return {"state":"ready" if available else "waiting_for_device","device_count":device_count,"commitment":commitments.get(key_id),"commitments":commitments,"pending_requests":pending,"offers":{offer_key_id:{device_id:{**offer,"key_id":offer_key_id} for device_id,offer in group.items() if device_id in own_ids} for offer_key_id,group in offers.items()}}
     def reset_channel_key(self, actor: str, channel_id: str, device_id: str, expected_epoch: int, admins: set[str] | None = None) -> int:
         if not self.can_view(channel_id,actor,admins or set()): raise PermissionError("channel_access")
         channel=self.data["channels"][channel_id]
@@ -311,6 +313,8 @@ class ChatDomain:
         return channel["key_epoch"]
     def security_code(self, channel_id: str) -> str: return hashlib.sha256(f"{self.data['server_id']}:{channel_id}:{self.data['channels'].get(channel_id,{}).get('key_epoch',1)}".encode()).hexdigest()[:12].upper()
     def request_key(self, user_id: str, channel_id: str, device_id: str) -> dict[str, Any]:
+        for request in self.data["key_requests"].values():
+            if request.get("user_id")==user_id and request.get("channel_id")==channel_id and request.get("device_id")==device_id: return request
         request={"id":new_id("keyreq"),"user_id":user_id,"device_id":device_id,"channel_id":channel_id,"created":time.time()}; self.data["key_requests"][request["id"]]=request; return request
     def revoke_device(self, actor: str, device_id: str, admins: set[str]) -> None:
         for uid, devices in self.data["devices"].items():

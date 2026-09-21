@@ -247,6 +247,7 @@ class HomeAssistantChatPanel extends HTMLElement {
       await this.refreshState(); await this.claimOffers();
       try { if (await dbGet("recovery-code")) await this.updateRecoveryBundle(); } catch { /* Optional recovery sync must never block the chat UI. */ }
       await this.selectChannel(this._active);
+      if (this._keySyncTimer) clearInterval(this._keySyncTimer); this._keySyncTimer = setInterval(() => this.syncKeyRequests().catch(() => {}), 10000);
       this._encryptionInitializing = false; this._encryptionRetryAttempt = 0; if (this._encryptionRetryTimer) { clearTimeout(this._encryptionRetryTimer); this._encryptionRetryTimer = null; }
     } catch (error) {
       this._encryptionInitializing = false; this._encryptionError = `${this.text.unavailable} (${this.sanitizeError(error)})`; this.render(); this.scheduleEncryptionRetry();
@@ -265,7 +266,7 @@ class HomeAssistantChatPanel extends HTMLElement {
     this._encryptionRetryTimer = setTimeout(() => { this._encryptionRetryTimer = null; this.startEncryption(); }, delay);
   }
 
-  disconnectedCallback() { this._disconnected = true; this.stopQrScanner(); if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; } if (this._encryptionRetryTimer) { clearTimeout(this._encryptionRetryTimer); this._encryptionRetryTimer = null; } if (typeof this._unsubscribe === "function") this._unsubscribe(); this._unsubscribe = null; this._ready = false; this._coreReady = false; }
+  disconnectedCallback() { this._disconnected = true; this.stopQrScanner(); if (this._keySyncTimer) { clearInterval(this._keySyncTimer); this._keySyncTimer = null; } if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; } if (this._encryptionRetryTimer) { clearTimeout(this._encryptionRetryTimer); this._encryptionRetryTimer = null; } if (typeof this._unsubscribe === "function") this._unsubscribe(); this._unsubscribe = null; this._ready = false; this._coreReady = false; }
 
   async refreshState() {
     this._state = await this.ws({type:"home_assistant_chat/state"});
@@ -284,12 +285,12 @@ class HomeAssistantChatPanel extends HTMLElement {
     if (this._active) await this.updateKeyState(this._active);
   }
 
-  async claimOffers() {
+  async claimOffers(states = null) {
     const identity = await deviceIdentity();
     let imported = false;
     for (const channel of this._channels) {
       try {
-        const state = await this.ws({type:"home_assistant_chat/key/state", channel_id:channel.id});
+        const state = states?.get(channel.id) || await this.ws({type:"home_assistant_chat/key/state", channel_id:channel.id});
         for (const group of Object.values(state.offers || {})) for (const offer of Object.values(group)) if (offer.device_id === identity.id) {
           const epoch = offer.key_id.split(":").pop(); const storageKey=`key:${channel.id}:${epoch}`; const existing=await channelKey(channel.id,epoch); const expected=state.commitments?.[offer.key_id] || null;
           if (expected && offer.key_commitment && offer.key_commitment !== expected) continue;
@@ -303,6 +304,18 @@ class HomeAssistantChatPanel extends HTMLElement {
       } catch { /* inaccessible channels are omitted */ }
     }
     return imported;
+  }
+
+  async syncKeyRequests() {
+    if (this._disconnected || !this._coreReady) return;
+    const states=new Map();
+    for (const channel of this._channels) try { states.set(channel.id,await this.ws({type:"home_assistant_chat/key/state",channel_id:channel.id})); } catch { /* A stale channel must not stop synchronization. */ }
+    await this.claimOffers(states);
+    for (const channel of this._channels) {
+      const epoch=channel.key_epoch || 1; const state=states.get(channel.id); if (!state) continue; const key=await channelKey(channel.id,epoch);
+      if (key && state.pending_requests?.length) await this.shareKey(channel.id,epoch);
+      if (channel.id === this._active && !key && this._messages.some((message) => message.channel_id === channel.id)) { this._keyRequests.delete(`${channel.id}:${epoch}`); await this.updateKeyState(channel.id); }
+    }
   }
 
   async updateKeyState(channelId) {
@@ -363,6 +376,16 @@ class HomeAssistantChatPanel extends HTMLElement {
 
   cannotPost(channel) { return Boolean(this._state?.is_muted || this._waiting || (channel?.kind === "announcement" && !this._state?.is_admin)); }
 
+  draftKey(channelId) { return `draft:${this._state?.server_id || this._state?.serverId || "local"}:${this._state?.user_id || "unknown"}:${channelId}`; }
+  queueDraftSave(channelId, value) {
+    if (!channelId) return; this._draftValues ||= new Map(); const key=this.draftKey(channelId); this._draftValues.set(key,value);
+    (value ? dbPut(key,value) : dbDelete(key)).catch(() => { /* Draft persistence is optional. */ });
+  }
+  async restoreDraft(channelId) {
+    if (!channelId) return;
+    try { this._draftValues ||= new Map(); const key=this.draftKey(channelId); const value=this._draftValues.has(key) ? this._draftValues.get(key) : await dbGet(key); this._draftValues.set(key,value || ""); const input = this.shadowRoot.querySelector("#message-input"); if (input && this._active === channelId && !input.value && value) input.value = value; } catch { /* Draft persistence is optional. */ }
+  }
+
   async sendMessage(event) {
     event.preventDefault(); const input = this.shadowRoot.querySelector("#message-input"); const channel = this._channels.find((item) => item.id === this._active);
     const value = input.value.trim(); if (!channel || !value || this.cannotPost(channel)) return; const epoch = channel.key_epoch || 1;
@@ -371,7 +394,7 @@ class HomeAssistantChatPanel extends HTMLElement {
       if (localKey && state.commitment && await channelKeyCommitment(localKey) !== state.commitment) { await dbDelete(`key:${channel.id}:${epoch}`); localKey=null; }
       if (!localKey && this._messages.some((message) => message.channel_id === channel.id)) { this._waiting = true; await this.updateKeyState(channel.id); return; }
       const encrypted = await encryptMessage(channel.id, epoch, value);
-      await this.ws({type:"home_assistant_chat/send", channel_id:channel.id, ...encrypted}); await this.shareKey(channel.id, epoch); await this.updateRecoveryBundle(); input.value = "";
+      await this.ws({type:"home_assistant_chat/send", channel_id:channel.id, ...encrypted}); await this.shareKey(channel.id, epoch); await this.updateRecoveryBundle(); this._draftValues?.delete(this.draftKey(channel.id)); await dbDelete(this.draftKey(channel.id)); input.value = "";
     } catch (error) { if (String(error?.code || error?.message).includes("key_commitment_conflict")) { await this.refreshState(); this._waiting=true; await this.updateKeyState(channel.id); } else { this._error = this.text.unavailable; this.render(); } }
   }
 
@@ -639,6 +662,8 @@ class HomeAssistantChatPanel extends HTMLElement {
       <form class="compose"><input id="message-input" maxlength="4000" autocomplete="off" placeholder="${esc(readOnly ? text.cannotPost : text.write)}" ${readOnly ? "disabled" : ""}><button class="button" ${readOnly ? "disabled" : ""}>${text.send}</button></form></section></main>`;
     this.shadowRoot.querySelectorAll("[data-channel]").forEach((button) => button.addEventListener("click", () => this.selectChannel(button.dataset.channel)));
     this.shadowRoot.querySelector(".compose")?.addEventListener("submit", (event) => this.sendMessage(event));
+    this.shadowRoot.querySelector("#message-input")?.addEventListener("input", (event) => this.queueDraftSave(this._active, event.target.value));
+    this.restoreDraft(this._active);
     this.shadowRoot.querySelector("#reset-key")?.addEventListener("click", () => this.resetEncryption(current));
     this.shadowRoot.querySelector("#new-private")?.addEventListener("click", () => this.privateDialog()); this.shadowRoot.querySelector("#admin")?.addEventListener("click", () => this.adminDialog()); this.shadowRoot.querySelector("#user-settings")?.addEventListener("click", () => this.userSettingsDialog());
     const privateChannelFor=(element) => channels.find((channel) => channel.id === element.dataset.channelId);
