@@ -293,6 +293,13 @@ def test_render_preserves_composer_focus_and_message_scroll():
     assert 'focus({preventScroll:true})' in source
     assert 'nextMessages.scrollTop=priorScroll.atBottom' in source
 
+def test_mobile_layout_uses_safe_area_dvh_and_horizontal_channels():
+    source = JS.read_text()
+    assert 'id="responsive-chat-style"' in source
+    assert 'height:100dvh' in source
+    assert 'env(safe-area-inset-bottom)' in source
+    assert 'overflow-x:auto' in source
+
 def test_decrypted_plaintext_is_cached_to_prevent_placeholder_layout_jumps():
     source = JS.read_text()
     assert 'this._plaintext ||= new Map()' in source
