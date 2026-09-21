@@ -286,3 +286,16 @@ def test_periodic_key_request_sync_covers_missed_events():
     assert 'setInterval(() => this.syncKeyRequests().catch(() => {}), 10000)' in source
     assert 'pending_requests?.length' in source
     assert 'this._keyRequests.delete(`${channel.id}:${epoch}`)' in source
+
+def test_render_preserves_composer_focus_and_message_scroll():
+    source = JS.read_text()
+    assert 'this.shadowRoot.activeElement?.id === "message-input"' in source
+    assert 'focus({preventScroll:true})' in source
+    assert 'nextMessages.scrollTop=priorScroll.atBottom' in source
+
+def test_decrypted_plaintext_is_cached_to_prevent_placeholder_layout_jumps():
+    source = JS.read_text()
+    assert 'this._plaintext ||= new Map()' in source
+    assert 'this._plaintext.set(sent.message.id,value)' in source
+    assert 'this._plaintext?.has(message.id) ? esc(this._plaintext.get(message.id))' in source
+    assert 'const currentInput=this.shadowRoot.querySelector("#message-input")' in source
