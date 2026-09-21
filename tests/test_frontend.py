@@ -417,3 +417,14 @@ def test_attachment_admin_switch_controls_ui_and_server_setting():
     assert 'id="setting-attachments"' in source
     assert 'attachments_enabled:content.querySelector("#setting-attachments").checked' in source
     assert 'this._state?.settings?.attachments_enabled' in source
+
+def test_images_auto_load_without_exposing_original_filenames_and_download_is_in_menu():
+    source = JS.read_text()
+    assert 'this._attachmentAutoActive<2' in source
+    assert 'queueAutomaticAttachment(message,container)' in source
+    assert 'class="attachment-menu"' in source
+    assert 'icon="mdi:dots-vertical"' in source
+    assert 'attachmentDownloadName(item)' in source
+    assert 'name:String(file.name' not in source
+    assert 'photo:"Photo"' in source and 'photo:"Foto"' in source
+    assert 'scope!==this._storageScope || this._disconnected' in source
