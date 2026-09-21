@@ -83,7 +83,7 @@ async def _state(hass, connection, msg):
     source=store.data["devices"].items() if admins else [(uid,store.data["devices"].get(uid,{}))]
     for owner, owned in source:
         for device in owned.values(): devices.append({k:v for k,v in device.items() if admins or k != "public_key"})
-    _result(connection,msg["id"],{"protocol_version":PROTOCOL_VERSION,"server_id":store.data["server_id"],"user_id":uid,"identity":str(own_identity),"identity_address":store.identity_address(uid),"channels":channels,"messages":page["messages"],"has_older_messages":page["has_older_messages"],"oldest_cursor":page["oldest_cursor"],"key_states":key_states,"devices":devices,"seen":store.data["seen"].get(uid,{}),"is_admin":bool(admins),"is_muted":bool(store.data["mutes"].get(uid)),"settings":{"enabled":settings["enabled"],"allow_users":settings["allow_users"],"attachments_enabled":settings["attachments_enabled"],"retention_days":settings["retention_days"],"show_security_details":settings["show_security_details"],"show_deleted_messages":settings["show_deleted_messages"],"federation_qr_enabled":settings["federation_qr_enabled"],"federation_address":settings["federation_address"],"federation_port":settings["federation_port"]}})
+    _result(connection,msg["id"],{"protocol_version":PROTOCOL_VERSION,"server_id":store.data["server_id"],"user_id":uid,"identity":str(own_identity),"identity_address":store.identity_address(uid),"channels":channels,"messages":page["messages"],"has_older_messages":page["has_older_messages"],"oldest_cursor":page["oldest_cursor"],"key_states":key_states,"devices":devices,"seen":store.data["seen"].get(uid,{}),"is_admin":bool(admins),"is_muted":bool(store.data["mutes"].get(uid)),"settings":{"enabled":settings["enabled"],"allow_users":settings["allow_users"],"attachments_enabled":settings["attachments_enabled"],"admins_can_delete_messages":settings["admins_can_delete_messages"],"retention_days":settings["retention_days"],"show_security_details":settings["show_security_details"],"show_deleted_messages":settings["show_deleted_messages"],"federation_qr_enabled":settings["federation_qr_enabled"],"federation_address":settings["federation_address"],"federation_port":settings["federation_port"]}})
 
 @websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/history", vol.Required("channel_id"): str, vol.Optional("before"): str})
 @websocket_api.async_response
@@ -237,7 +237,7 @@ async def _message_delete(hass, connection, msg):
     store=_store(hass)
     if not _require_access(store,connection,msg["id"]): return
     channel_id=store.data["messages"].get(msg["message_id"],{}).get("channel_id")
-    try: store.check_rate(_uid(connection)); store.domain.delete_message(_uid(connection),msg["message_id"],_admins(connection),store.settings()["show_deleted_messages"]); await store.changed("message_deleted",message_id=msg["message_id"],channel_id=channel_id)
+    try: store.check_rate(_uid(connection)); settings=store.settings(); store.domain.delete_message(_uid(connection),msg["message_id"],_admins(connection),settings["show_deleted_messages"],settings["admins_can_delete_messages"]); await store.changed("message_deleted",message_id=msg["message_id"],channel_id=channel_id)
     except (PermissionError,KeyError,ValueError) as err: _error(connection,msg["id"],str(err))
     else: _result(connection,msg["id"])
 
@@ -441,11 +441,11 @@ async def _recovery_set(hass, connection, msg):
     except (PermissionError,ValueError) as err: _error(connection,msg["id"],str(err))
     else: _result(connection,msg["id"],result)
 
-@websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/settings", vol.Optional("enabled"): bool, vol.Optional("allow_users"): bool, vol.Optional("attachments_enabled"): bool, vol.Optional("allowed_users"): [str], vol.Optional("retention_days"): int, vol.Optional("show_security_details"): bool, vol.Optional("show_deleted_messages"): bool, vol.Optional("federation_qr_enabled"): bool, vol.Optional("federation_address"): str, vol.Optional("federation_port"): int})
+@websocket_api.websocket_command({vol.Required("type"): "home_assistant_chat/settings", vol.Optional("enabled"): bool, vol.Optional("allow_users"): bool, vol.Optional("attachments_enabled"): bool, vol.Optional("admins_can_delete_messages"): bool, vol.Optional("allowed_users"): [str], vol.Optional("retention_days"): int, vol.Optional("show_security_details"): bool, vol.Optional("show_deleted_messages"): bool, vol.Optional("federation_qr_enabled"): bool, vol.Optional("federation_address"): str, vol.Optional("federation_port"): int})
 @websocket_api.require_admin
 @websocket_api.async_response
 async def _settings(hass, connection, msg):
-    store=_store(hass); updates={k:v for k,v in msg.items() if k in {"enabled","allow_users","attachments_enabled","retention_days","show_security_details","show_deleted_messages","federation_qr_enabled","federation_address","federation_port"}}
+    store=_store(hass); updates={k:v for k,v in msg.items() if k in {"enabled","allow_users","attachments_enabled","admins_can_delete_messages","retention_days","show_security_details","show_deleted_messages","federation_qr_enabled","federation_address","federation_port"}}
     proposed={**store.settings(), **updates}
     retention=proposed.get("retention_days")
     if isinstance(retention,bool) or not isinstance(retention,int) or not 0 <= retention <= 3650:

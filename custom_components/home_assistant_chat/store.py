@@ -94,7 +94,7 @@ class ChatStore:
             await self._store.async_save(self.data)
 
     def settings(self) -> dict[str, Any]:
-        return {key:self.entry.options.get(key, self.entry.data.get(key, default)) for key,default in {"enabled":True,"allow_users":True,"attachments_enabled":True,"retention_days":0,"show_security_details":False,"show_deleted_messages":True,"federation_qr_enabled":False,"federation_address":"","federation_port":0}.items()}
+        return {key:self.entry.options.get(key, self.entry.data.get(key, default)) for key,default in {"enabled":True,"allow_users":True,"attachments_enabled":True,"admins_can_delete_messages":False,"retention_days":0,"show_security_details":False,"show_deleted_messages":True,"federation_qr_enabled":False,"federation_address":"","federation_port":0}.items()}
 
     def identity_address(self, user_id: str) -> str:
         """Return a QR-safe local identity, optionally with the configured suffix."""

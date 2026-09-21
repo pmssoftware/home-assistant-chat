@@ -350,10 +350,10 @@ class ChatDomain:
         message_id=new_id("message")
         msg={"id":message_id,"channel_id":channel_id,"sender_id":actor,"origin_server_id":self.data["server_id"],"protocol_version":PROTOCOL_VERSION,"ciphertext":ciphertext,"envelope":envelope,"created":now or time.time(),"deleted":False}
         self.data["messages"][message_id]=msg; return msg
-    def delete_message(self, actor: str, message_id: str, admins: set[str], keep_marker: bool = True) -> None:
+    def delete_message(self, actor: str, message_id: str, admins: set[str], keep_marker: bool = True, allow_admin: bool = False) -> None:
         msg=self.data["messages"].get(message_id)
         if not msg: raise KeyError("message_not_found")
-        if msg["sender_id"] != actor: raise PermissionError("message_access")
+        if msg["sender_id"] != actor and not (allow_admin and actor in admins): raise PermissionError("message_access")
         if keep_marker: msg.update(deleted=True, ciphertext="", envelope={})
         else: self.data["messages"].pop(message_id)
     def delete_private(self, actor: str, channel_id: str, confirm: bool) -> None:

@@ -61,6 +61,15 @@ def test_users_delete_only_their_own_messages_and_can_purge_without_marker():
     d.delete_message("user",msg["id"],{"admin"},keep_marker=False)
     assert msg["id"] not in d.data["messages"]
 
+def test_admin_can_delete_another_users_message_only_when_explicitly_enabled():
+    d=ChatDomain.fresh(); d.register_device("user",DEVICE_ID,PUBLIC_JWK)
+    msg=d.add_message("user","public","AAAAAAAAAAAAAAAAAAAAAA==",envelope(),{"admin"})
+    try: d.delete_message("admin",msg["id"],{"admin"})
+    except PermissionError as err: assert str(err) == "message_access"
+    else: assert False
+    d.delete_message("admin",msg["id"],{"admin"},allow_admin=True)
+    assert d.data["messages"][msg["id"]]["deleted"]
+
 def test_non_admin_mutation_handlers_require_access_guard():
     source=(ROOT / "custom_components/home_assistant_chat/websocket.py").read_text()
     for handler in ("_message_delete", "_private_delete", "_private_silence", "_unblock", "_seen"):

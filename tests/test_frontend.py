@@ -146,6 +146,14 @@ def test_compact_icon_controls():
     assert '.button.delete-message:hover{' in source
     assert '.delete-message ha-icon{--mdc-icon-size:18px}' in source
 
+def test_admin_delete_other_messages_is_an_explicit_setting():
+    source = JS.read_text()
+    assert 'adminsDeleteMessages:"Allow administrators to delete other users’ messages"' in source
+    assert 'adminsDeleteMessages:"Administratoren dürfen Nachrichten anderer Benutzer löschen"' in source
+    assert 'id="setting-admin-delete"' in source
+    assert 'admins_can_delete_messages:content.querySelector("#setting-admin-delete").checked' in source
+    assert 'this._state?.is_admin && this._state?.settings?.admins_can_delete_messages' in source
+
 def test_default_channel_names_follow_personal_browser_language():
     source = JS.read_text()
     assert 'announcements:"Announcements"' in source
