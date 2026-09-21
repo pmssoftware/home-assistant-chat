@@ -101,7 +101,8 @@ def test_panel_url_is_cache_busted_by_manifest_version():
 
 def test_chat_actions_and_composer_use_the_requested_layout():
     source = JS.read_text()
-    assert '<div class="side-top"><h2>${text.chat}</h2><button class="button" id="new-private"' in source
+    assert '<div class="side-top" style="gap:4px"><ha-menu-button id="ha-sidebar-toggle"' in source
+    assert '<h2>${text.chat}</h2><button class="button" id="new-private"' in source
     assert '<div class="header-actions">${(this._state?.is_admin ?? this._hass?.user?.is_admin)' in source
     assert 'height:var(--chat-header-height)' in source
     assert '<div class="message-head"><small>' in source
@@ -373,6 +374,14 @@ def test_mobile_layout_uses_safe_area_dvh_and_horizontal_channels():
     assert 'env(safe-area-inset-bottom)' in source
     assert 'overflow-x:auto' in source
 
+def test_mobile_layout_exposes_home_assistant_sidebar_navigation():
+    source = JS.read_text()
+    assert '<ha-menu-button id="ha-sidebar-toggle"' in source
+    assert '.ha-sidebar-toggle{display:none}' in source
+    assert '.ha-sidebar-toggle{display:block' in source
+    assert 'menuButton.hass=this._hass' in source
+    assert 'menuButton.narrow=true' in source
+
 def test_ios_visual_viewport_lifecycle_and_composer_visibility():
     source = JS.read_text()
     assert 'window.visualViewport' in source
@@ -385,5 +394,26 @@ def test_decrypted_plaintext_is_cached_to_prevent_placeholder_layout_jumps():
     source = JS.read_text()
     assert 'this._plaintext ||= new Map()' in source
     assert 'this._plaintext.set(sent.message.id,value)' in source
-    assert 'this._plaintext?.has(message.id) ? esc(this._plaintext.get(message.id))' in source
+    assert 'this._plaintext?.has(message.id) ? this.messageBodyMarkup(this._plaintext.get(message.id),message)' in source
     assert 'const currentInput=this.shadowRoot.querySelector("#message-input")' in source
+
+def test_encrypted_photo_and_video_attachments_are_chunked_and_rendered_safely():
+    source = JS.read_text()
+    assert 'accept="image/*,video/*"' in source
+    assert 'file.size>25*1024*1024' in source
+    assert 'home_assistant_chat/attachment/start' in source
+    assert 'home_assistant_chat/attachment/chunk' in source
+    assert 'home_assistant_chat/attachment/finish' in source
+    assert 'home_assistant_chat/attachment/get' in source
+    assert '<video src=' in source and '<img src=' in source
+    assert 'URL.revokeObjectURL' in source
+    assert 'message?.attachment_id===item.id' in source
+    assert 'total!==item.size+16' in source
+
+def test_attachment_admin_switch_controls_ui_and_server_setting():
+    source = JS.read_text()
+    assert 'allowAttachments:"Allow photo and video attachments"' in source
+    assert 'allowAttachments:"Foto- und Videoanhänge erlauben"' in source
+    assert 'id="setting-attachments"' in source
+    assert 'attachments_enabled:content.querySelector("#setting-attachments").checked' in source
+    assert 'this._state?.settings?.attachments_enabled' in source

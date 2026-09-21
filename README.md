@@ -13,7 +13,7 @@ Home Assistant Chat is a local custom integration with a native sidebar panel.
 It runs inside Home Assistant and does not require a separate add-on or chat
 server for local use.
 
-Current experimental version: **0.4.2**
+Current experimental version: **0.4.3**
 
 ## Installation
 
@@ -38,6 +38,7 @@ Choose **Integration** as its category.
 - Private chats and restricted groups
 - User blocking and personal chat muting
 - Message and entire private-chat deletion
+- Client-encrypted photo and video attachments up to 25 MB, with an administrator enable/disable switch
 - English and German interface
 - Experimental browser-side message encryption (mandatory in this prototype)
 - Stable eight-digit local contact identities
@@ -73,7 +74,9 @@ resistant to a malicious or compromised server, a malicious custom frontend,
 same-origin code, a browser extension, or a compromised device.
 
 Participants, timing, device IDs, channel IDs, and other metadata remain
-visible to the server. Browser keys are extractable so that recovery and device
+visible to the server. For attachments, the server also sees the encrypted file
+size and its channel/sender association, but not the encrypted filename, media
+type, or contents. Browser keys are extractable so that recovery and device
 sharing can work, and local drafts are stored as plaintext in browser
 IndexedDB. A recovery code protects an encrypted recovery bundle; browser key
 storage and recovery data are scoped to the Home Assistant server and user.

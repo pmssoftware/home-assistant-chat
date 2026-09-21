@@ -89,3 +89,16 @@ def test_history_is_bounded_and_subscriptions_recheck_access():
     assert "MESSAGE_PAGE_SIZE = 100" in source
     assert "if not store.can_use(uid,is_admin): return" in source
     assert 'request={key:value for key,value in result.items() if key != "user_id"}' in source
+
+def test_attachment_transport_is_bounded_permission_checked_and_admin_switchable():
+    store=(ROOT / "custom_components/home_assistant_chat/store.py").read_text()
+    websocket=(ROOT / "custom_components/home_assistant_chat/websocket.py").read_text()
+    const=(ROOT / "custom_components/home_assistant_chat/const.py").read_text()
+    assert 'MAX_ATTACHMENT_SIZE = 25 * 1024 * 1024' in const
+    assert 'MAX_ATTACHMENT_STORAGE = 1024 * 1024 * 1024' in const
+    assert 'MAX_PENDING_ATTACHMENT_BYTES_PER_USER = 75 * 1024 * 1024' in const
+    assert 'self.domain.can_post(channel_id,user_id,admins)' in store
+    assert 'self.domain.can_view(record["channel_id"],user_id,admins)' in store
+    assert 'self.settings()["attachments_enabled"]' in store
+    assert 'len(chunk)>ATTACHMENT_CHUNK_SIZE' in store
+    assert 'vol.Optional("attachment_id")' in websocket
