@@ -156,6 +156,25 @@ def test_default_channel_names_follow_personal_browser_language():
     assert 'if (channel?.id === "announcements") return this.text.announcements' in source
     assert '${esc(this.channelName(channel))}' in source
 
+def test_announcements_are_presented_as_neutral_server_messages():
+    source = JS.read_text()
+    assert 'serverMessage:"Server"' in source
+    assert 'current?.kind === "announcement" ? text.serverMessage' in source
+    assert 'current?.kind !== "announcement" && message.sender_id === this._state?.user_id' in source
+    assert 'current?.kind === "announcement" ? "announcement-message"' in source
+    assert '.announcement-message{margin-left:auto;margin-right:auto' in source
+
+def test_private_messages_deposit_recipient_keys_before_sending():
+    source = JS.read_text()
+    private_guard = 'if (channel.kind === "private")'
+    send_call = 'const sent=await this.ws({type:"home_assistant_chat/send"'
+    assert source.index(private_guard, source.index('async sendMessage')) < source.index(send_call, source.index('async sendMessage'))
+    assert 'if (!delivery.peerTargets)' in source
+    assert 'delivery.lookupFailed || delivery.peerFailed' in source
+    assert 'key_offer_conflict' in source
+    assert 'offlineSetupRequired:"This contact has not registered a Chat device yet.' in source
+    assert 'offlineSetupRequired:"Dieser Kontakt hat noch kein Chat-Gerät registriert.' in source
+
 def test_frontend_languages_are_extensible_and_fall_back_to_english():
     source = JS.read_text()
     assert 'return STRINGS[language] ? language : "en"' in source
